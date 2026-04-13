@@ -1,0 +1,28 @@
+.PHONY: build test fmt fmt-check lint clean deploy-local deploy-testnet
+
+build:
+	stellar contract build
+
+test:
+	cargo test
+
+fmt:
+	cargo fmt
+
+fmt-check:
+	cargo fmt --check
+
+lint:
+	cargo clippy --all-targets -- -D warnings
+
+check:
+	cargo check --all
+
+clean:
+	cargo clean
+
+deploy-local:
+	./scripts/deploy-local.sh
+
+deploy-testnet:
+	./scripts/deploy-testnet.sh
