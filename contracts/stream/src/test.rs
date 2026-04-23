@@ -167,3 +167,57 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
+
+// ── Multi-token tests (issue #23) ────────────────────────────────────────────
+
+#[test]
+fn test_streams_with_different_tokens() {
+    // Two concurrent streams each using a distinct SEP-41 token contract.
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+
+    let token_a = setup_token(&env, &employer);
+    let token_b = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id_a = client.create_stream(&employer, &employee, &token_a, &1_000, &5, &0);
+    let id_b = client.create_stream(&employer, &employee, &token_b, &2_000, &10, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+
+    // Each stream accrues independently with its own token
+    assert_eq!(client.claimable(&id_a), 500);  // 100s * 5
+    assert_eq!(client.claimable(&id_b), 1000); // 100s * 10
+
+    assert_eq!(client.get_stream(&id_a).token, token_a);
+    assert_eq!(client.get_stream(&id_b).token, token_b);
+}
+
+#[test]
+fn test_withdraw_correct_token_per_stream() {
+    // Withdrawing from each stream transfers the correct token.
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+
+    let token_a = setup_token(&env, &employer);
+    let token_b = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id_a = client.create_stream(&employer, &employee, &token_a, &500, &5, &0);
+    let id_b = client.create_stream(&employer, &employee, &token_b, &500, &5, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 50);
+
+    let w_a = client.withdraw(&employee, &id_a);
+    let w_b = client.withdraw(&employee, &id_b);
+
+    assert_eq!(w_a, 250); // 50s * 5
+    assert_eq!(w_b, 250);
+    // Tokens are independent — each stream tracks its own withdrawn amount
+    assert_eq!(client.get_stream(&id_a).withdrawn, 250);
+    assert_eq!(client.get_stream(&id_b).withdrawn, 250);
+}

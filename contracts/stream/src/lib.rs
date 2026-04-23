@@ -42,8 +42,10 @@ impl StreamContract {
             assert!(stop_time > now, "stop_time must be in the future");
         }
 
-        // Pull deposit from employer into this contract
+        // Validate token is SEP-41 compliant by probing the balance interface,
+        // then pull deposit from employer into this contract.
         let token_client = token::Client::new(&env, &token_address);
+        token_client.balance(&employer); // panics if token is not SEP-41
         token_client.transfer(&employer, &env.current_contract_address(), &deposit);
 
         let id = next_id(&env);
