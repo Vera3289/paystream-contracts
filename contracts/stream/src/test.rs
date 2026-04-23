@@ -167,3 +167,52 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn test_create_stream_blocked_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.pause_contract(&admin);
+    client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+}
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn test_withdraw_blocked_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    client.pause_contract(&admin);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employee, &id);
+}
+
+#[test]
+fn test_unpause_restores_operations() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    client.pause_contract(&admin);
+    client.unpause_contract(&admin);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, 1000);
+}

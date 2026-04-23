@@ -28,3 +28,10 @@ pub fn topped_up(env: &Env, id: u64, employer: &Address, amount: i128) {
         (employer.clone(), amount),
     );
 }
+
+pub fn contract_paused(env: &Env, paused: bool) {
+    env.events().publish(
+        (symbol_short!("paused"),),
+        paused,
+    );
+}

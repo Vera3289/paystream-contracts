@@ -24,6 +24,14 @@ pub fn get_admin(env: &Env) -> Address {
     env.storage().instance().get(&DataKey::Admin).expect("admin not set")
 }
 
+pub fn is_paused(env: &Env) -> bool {
+    env.storage().instance().get(&DataKey::ContractPaused).unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::ContractPaused, &paused);
+}
+
 /// Tokens earned by employee up to `now` that have not yet been withdrawn.
 pub fn claimable_amount(stream: &Stream, now: u64) -> i128 {
     if stream.status == StreamStatus::Cancelled || stream.status == StreamStatus::Exhausted {

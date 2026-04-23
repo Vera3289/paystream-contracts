@@ -8,7 +8,7 @@ mod types;
 mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin};
+use storage::{claimable_amount, get_admin, is_paused, load_stream, next_id, save_stream, set_admin, set_paused};
 use types::{DataKey, Stream, StreamStatus};
 
 #[contract]
@@ -20,6 +20,22 @@ impl StreamContract {
     pub fn initialize(env: Env, admin: Address) {
         admin.require_auth();
         set_admin(&env, &admin);
+    }
+
+    /// Admin pauses the entire contract — blocks new streams and withdrawals.
+    pub fn pause_contract(env: Env) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        set_paused(&env, true);
+        events::contract_paused(&env, true);
+    }
+
+    /// Admin unpauses the contract, restoring normal operation.
+    pub fn unpause_contract(env: Env) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        set_paused(&env, false);
+        events::contract_paused(&env, false);
     }
 
     /// Employer creates a salary stream and deposits funds into the contract.
@@ -34,6 +50,7 @@ impl StreamContract {
         stop_time: u64,
     ) -> u64 {
         employer.require_auth();
+        assert!(!is_paused(&env), "contract is paused");
         assert!(deposit > 0, "deposit must be positive");
         assert!(rate_per_second > 0, "rate must be positive");
 
@@ -68,6 +85,7 @@ impl StreamContract {
     /// Employee withdraws all claimable tokens earned so far.
     pub fn withdraw(env: Env, employee: Address, stream_id: u64) -> i128 {
         employee.require_auth();
+        assert!(!is_paused(&env), "contract is paused");
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employee, employee, "not the employee");
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
