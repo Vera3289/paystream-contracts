@@ -252,6 +252,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "locked"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "rate_per_second"
                       },
                       "val": {
