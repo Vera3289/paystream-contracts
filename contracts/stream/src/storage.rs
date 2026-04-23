@@ -39,3 +39,8 @@ pub fn claimable_amount(stream: &Stream, now: u64) -> i128 {
     let remaining = stream.deposit - stream.withdrawn;
     earned.min(remaining).max(0)
 }
+
+/// Tokens claimable at an arbitrary timestamp (past or future).
+pub fn claimable_at(stream: &Stream, timestamp: u64) -> i128 {
+    claimable_amount(stream, timestamp)
+}

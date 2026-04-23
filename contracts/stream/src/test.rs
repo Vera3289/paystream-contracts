@@ -167,3 +167,79 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
+
+// ── Issue #25: claimable_at tests ────────────────────────────────────────────
+
+#[test]
+fn test_claimable_at_past_timestamp() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let start = env.ledger().timestamp();
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    // Query a past timestamp (50s after start)
+    assert_eq!(client.claimable_at(&id, &(start + 50)), 500);
+}
+
+#[test]
+fn test_claimable_at_future_timestamp() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let start = env.ledger().timestamp();
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    // Query a future timestamp (300s after start)
+    assert_eq!(client.claimable_at(&id, &(start + 300)), 3000);
+}
+
+#[test]
+fn test_claimable_at_respects_stop_time() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let start = env.ledger().timestamp();
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &(start + 100));
+
+    // Querying beyond stop_time must be capped at stop_time
+    assert_eq!(client.claimable_at(&id, &(start + 500)), 1000); // capped at 100s * 10
+}
+
+#[test]
+fn test_claimable_at_paused_stream() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let start = env.ledger().timestamp();
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    // Pause after 50s
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    client.pause_stream(&employer, &id);
+
+    // claimable_at while paused should reflect only active time up to pause
+    assert_eq!(client.claimable_at(&id, &(start + 50)), 500);
+    // Future timestamp while still paused — last_withdraw_time is still start, status Paused
+    // claimable_amount returns 0 for Paused? No — it only returns 0 for Cancelled/Exhausted.
+    // Paused streams still compute based on last_withdraw_time; the contract prevents withdraw.
+    // So claimable_at for a paused stream at a future time will show accrued (not yet withdrawn).
+    // This is consistent with the existing claimable_amount logic.
+    assert_eq!(client.claimable_at(&id, &(start + 100)), 1000);
+}

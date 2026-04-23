@@ -8,7 +8,7 @@ mod types;
 mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin};
+use storage::{claimable_amount, claimable_at as storage_claimable_at, get_admin, load_stream, next_id, save_stream, set_admin};
 use types::{DataKey, Stream, StreamStatus};
 
 #[contract]
@@ -175,6 +175,13 @@ impl StreamContract {
     pub fn claimable(env: Env, stream_id: u64) -> i128 {
         let stream = load_stream(&env, stream_id).expect("stream not found");
         claimable_amount(&stream, env.ledger().timestamp())
+    }
+
+    /// How many tokens would be claimable at an arbitrary timestamp.
+    /// Useful for UI projections (future) and auditing (past).
+    pub fn claimable_at(env: Env, stream_id: u64, timestamp: u64) -> i128 {
+        let stream = load_stream(&env, stream_id).expect("stream not found");
+        storage_claimable_at(&stream, timestamp)
     }
 
     /// Total streams created.
