@@ -34,3 +34,14 @@ pub enum DataKey {
     StreamCount,
     Admin,
 }
+
+/// Parameters for a single stream inside a batch creation call.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct StreamParams {
+    pub employee: Address,
+    pub token: Address,
+    pub deposit: i128,
+    pub rate_per_second: i128,
+    pub stop_time: u64,
+}

@@ -167,3 +167,61 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
+
+// ── Batch stream creation tests (issue #24) ───────────────────────────────────
+
+#[test]
+fn test_create_streams_batch() {
+    use soroban_sdk::Vec;
+    use crate::types::StreamParams;
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let emp1 = Address::generate(&env);
+    let emp2 = Address::generate(&env);
+    let emp3 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+
+    let mut params = Vec::new(&env);
+    params.push_back(StreamParams { employee: emp1.clone(), token: token_id.clone(), deposit: 1_000, rate_per_second: 5, stop_time: 0 });
+    params.push_back(StreamParams { employee: emp2.clone(), token: token_id.clone(), deposit: 2_000, rate_per_second: 10, stop_time: 0 });
+    params.push_back(StreamParams { employee: emp3.clone(), token: token_id.clone(), deposit: 500,   rate_per_second: 2, stop_time: 0 });
+
+    let ids = client.create_streams_batch(&employer, &params);
+
+    assert_eq!(ids.len(), 3);
+    assert_eq!(client.stream_count(), 3);
+
+    assert_eq!(client.get_stream(&ids.get(0).unwrap()).employee, emp1);
+    assert_eq!(client.get_stream(&ids.get(1).unwrap()).deposit, 2_000);
+    assert_eq!(client.get_stream(&ids.get(2).unwrap()).rate_per_second, 2);
+}
+
+#[test]
+fn test_batch_streams_accrue_independently() {
+    use soroban_sdk::Vec;
+    use crate::types::StreamParams;
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let emp1 = Address::generate(&env);
+    let emp2 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+
+    let mut params = Vec::new(&env);
+    params.push_back(StreamParams { employee: emp1.clone(), token: token_id.clone(), deposit: 1_000, rate_per_second: 5,  stop_time: 0 });
+    params.push_back(StreamParams { employee: emp2.clone(), token: token_id.clone(), deposit: 2_000, rate_per_second: 10, stop_time: 0 });
+
+    let ids = client.create_streams_batch(&employer, &params);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+
+    assert_eq!(client.claimable(&ids.get(0).unwrap()), 500);  // 100 * 5
+    assert_eq!(client.claimable(&ids.get(1).unwrap()), 1000); // 100 * 10
+}
