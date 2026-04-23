@@ -53,17 +53,19 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli --features opt
-
       - name: Cache cargo
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin
             target
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --features opt
 
       - name: Build contracts
         run: stellar contract build
