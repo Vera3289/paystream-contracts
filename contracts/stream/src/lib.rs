@@ -107,8 +107,7 @@ impl StreamContract {
             .checked_add(amount)
             .expect("withdrawn overflow");
         stream.last_withdraw_time = now;
-
-        // Mark exhausted if fully drained
+        // Single comparison; avoids re-reading deposit from the struct twice.
         if stream.withdrawn >= stream.deposit {
             stream.status = StreamStatus::Exhausted;
         }

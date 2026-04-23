@@ -32,11 +32,13 @@ pub fn get_admin(env: &Env) -> Address {
 /// All arithmetic uses checked or saturating operations to prevent overflow
 /// with large `rate_per_second` or `elapsed` values (see issue #2).
 pub fn claimable_amount(stream: &Stream, now: u64) -> i128 {
-    if stream.status == StreamStatus::Cancelled || stream.status == StreamStatus::Exhausted {
-        return 0;
+    match stream.status {
+        StreamStatus::Cancelled | StreamStatus::Exhausted => return 0,
+        _ => {}
     }
-    let effective_end = if stream.stop_time > 0 {
-        now.min(stream.stop_time)
+    // Cap at stop_time in one expression to avoid a branch in the common case.
+    let effective_end = if stream.stop_time > 0 && now > stream.stop_time {
+        stream.stop_time
     } else {
         now
     };
