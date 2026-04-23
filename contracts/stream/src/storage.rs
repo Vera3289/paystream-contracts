@@ -1,4 +1,4 @@
-use soroban_sdk::{Env, Address};
+use soroban_sdk::{Env, Address, Vec};
 use crate::types::{DataKey, Stream, StreamStatus};
 
 pub fn save_stream(env: &Env, stream: &Stream) {
@@ -38,4 +38,19 @@ pub fn claimable_amount(stream: &Stream, now: u64) -> i128 {
     let earned = elapsed * stream.rate_per_second;
     let remaining = stream.deposit - stream.withdrawn;
     earned.min(remaining).max(0)
+}
+
+/// Append `stream_id` to the employer's stream index.
+/// Called once per `create_stream`; O(1) amortised — no full scan.
+pub fn index_employer_stream(env: &Env, employer: &Address, stream_id: u64) {
+    let key = DataKey::EmployerStreams(employer.clone());
+    let mut ids: Vec<u64> = env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+    ids.push_back(stream_id);
+    env.storage().persistent().set(&key, &ids);
+}
+
+/// Return all stream IDs owned by `employer`.
+pub fn get_employer_streams(env: &Env, employer: &Address) -> Vec<u64> {
+    let key = DataKey::EmployerStreams(employer.clone());
+    env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env))
 }

@@ -7,8 +7,9 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
+use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin,
+              index_employer_stream, get_employer_streams};
 use types::{DataKey, Stream, StreamStatus};
 
 #[contract]
@@ -61,6 +62,7 @@ impl StreamContract {
             status: StreamStatus::Active,
         };
         save_stream(&env, &stream);
+        index_employer_stream(&env, &employer, id);
         events::stream_created(&env, id, &employer, &employee, rate_per_second);
         id
     }
@@ -180,5 +182,11 @@ impl StreamContract {
     /// Total streams created.
     pub fn stream_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::StreamCount).unwrap_or(0)
+    }
+
+    /// Return all stream IDs owned by `employer`. O(n) in the number of their streams,
+    /// not the total stream count — backed by a per-employer index.
+    pub fn streams_by_employer(env: Env, employer: Address) -> Vec<u64> {
+        get_employer_streams(&env, &employer)
     }
 }

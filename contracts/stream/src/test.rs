@@ -167,3 +167,71 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
+
+#[test]
+fn test_streams_by_employer_single() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+
+    let ids = client.streams_by_employer(&employer);
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids.get(0).unwrap(), id);
+}
+
+#[test]
+fn test_streams_by_employer_multiple_streams() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let e1 = Address::generate(&env);
+    let e2 = Address::generate(&env);
+    let id1 = client.create_stream(&employer, &e1, &token_id, &1000, &1, &0);
+    let id2 = client.create_stream(&employer, &e2, &token_id, &2000, &2, &0);
+
+    let ids = client.streams_by_employer(&employer);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.get(0).unwrap(), id1);
+    assert_eq!(ids.get(1).unwrap(), id2);
+}
+
+#[test]
+fn test_streams_by_employer_isolation() {
+    // Two employers — each only sees their own streams.
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let emp_a = Address::generate(&env);
+    let emp_b = Address::generate(&env);
+    let token_a = setup_token(&env, &emp_a);
+    let token_b = setup_token(&env, &emp_b);
+
+    client.initialize(&admin);
+    let employee = Address::generate(&env);
+    let id_a = client.create_stream(&emp_a, &employee, &token_a, &1000, &1, &0);
+    let id_b = client.create_stream(&emp_b, &employee, &token_b, &2000, &2, &0);
+
+    let ids_a = client.streams_by_employer(&emp_a);
+    let ids_b = client.streams_by_employer(&emp_b);
+    assert_eq!(ids_a.len(), 1);
+    assert_eq!(ids_a.get(0).unwrap(), id_a);
+    assert_eq!(ids_b.len(), 1);
+    assert_eq!(ids_b.get(0).unwrap(), id_b);
+}
+
+#[test]
+fn test_streams_by_employer_empty() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    client.initialize(&admin);
+    let ids = client.streams_by_employer(&employer);
+    assert_eq!(ids.len(), 0);
+}
