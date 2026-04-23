@@ -16,6 +16,7 @@ PayStream lets employers stream salaries to employees in real-time, per-second. 
 - **Transparent** — every stream, withdrawal, and cancellation is an immutable on-chain event
 - **Stellar-native** — built on Stellar's fast, low-fee infrastructure with Soroban smart contracts
 - **Flexible** — pause, resume, top-up, or cancel streams; optional hard stop time
+- **Multi-token** — each stream can use any [SEP-41](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0041.md) compliant token; employer and employee can run concurrent streams in different assets
 
 ---
 
@@ -97,6 +98,7 @@ make lint
 |---|---|---|
 | `initialize(admin)` | Admin | Set contract admin |
 | `create_stream(employer, employee, token, deposit, rate_per_second, stop_time)` | Employer | Create stream, lock deposit |
+| `create_streams_batch(employer, params)` | Employer | Create multiple streams atomically; all succeed or all revert |
 | `withdraw(employee, stream_id)` | Employee | Withdraw all claimable earnings |
 | `top_up(employer, stream_id, amount)` | Employer | Add more funds to active stream |
 | `pause_stream(employer, stream_id)` | Employer | Pause accrual |
@@ -105,6 +107,15 @@ make lint
 | `get_stream(stream_id)` | Anyone | Read stream state |
 | `claimable(stream_id)` | Anyone | Query withdrawable amount right now |
 | `stream_count()` | Anyone | Total streams created |
+
+### Batch vs Individual Stream Creation — Fee Comparison
+
+| Approach | Transactions | Approx. fee |
+|---|---|---|
+| N individual `create_stream` calls | N | N × base fee |
+| One `create_streams_batch` call | 1 | 1 × base fee + per-stream resource overhead |
+
+`create_streams_batch` is cheaper for N ≥ 2 because Stellar charges one base fee per transaction. Per-stream resource overhead grows linearly but is far smaller than the per-transaction base fee saved.
 
 ### Stream Status Lifecycle
 
