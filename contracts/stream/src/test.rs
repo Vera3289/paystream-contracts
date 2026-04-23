@@ -161,6 +161,80 @@ fn test_stop_time_caps_claimable() {
     assert_eq!(client.claimable(&id), 500); // capped at 50s * 10
 }
 
+/// Issue #15: paused 100s must not count toward claimable
+#[test]
+fn test_pause_excludes_paused_time() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    // 50s active → pause → 100s paused → resume → 50s active
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    client.pause_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 100); // paused — must not count
+    client.resume_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 50);
+
+    // Only 50 + 50 = 100s of active time counted
+    assert_eq!(client.claimable(&id), 1000);
+}
+
+/// Issue #15: multiple pause/resume cycles all exclude paused time
+#[test]
+fn test_multiple_pause_resume_cycles() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    // cycle 1: 30s active, 200s paused
+    env.ledger().with_mut(|l| l.timestamp += 30);
+    client.pause_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    client.resume_stream(&employer, &id);
+
+    // cycle 2: 20s active, 300s paused
+    env.ledger().with_mut(|l| l.timestamp += 20);
+    client.pause_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 300);
+    client.resume_stream(&employer, &id);
+
+    // 40s active after last resume
+    env.ledger().with_mut(|l| l.timestamp += 40);
+
+    // Only 30 + 20 + 40 = 90s of active time → 900 tokens
+    assert_eq!(client.claimable(&id), 900);
+}
+
+/// Issue #15: withdraw during pause returns 0 new accrual
+#[test]
+#[should_panic(expected = "stream not active")]
+fn test_withdraw_during_pause_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    client.pause_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    // withdraw while paused must fail
+    client.withdraw(&employee, &id);
+}
+
 #[test]
 #[should_panic(expected = "stream not active")]
 fn test_cannot_withdraw_from_cancelled_stream() {
