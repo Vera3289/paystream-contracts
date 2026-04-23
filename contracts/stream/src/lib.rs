@@ -74,6 +74,53 @@ impl StreamContract {
         id
     }
 
+    /// Employer creates multiple salary streams atomically in a single transaction.
+    /// All streams succeed or the entire transaction reverts — no partial state.
+    /// Returns the list of newly created stream IDs in the same order as `params`.
+    pub fn create_streams_batch(
+        env: Env,
+        employer: Address,
+        params: Vec<StreamParams>,
+    ) -> Vec<u64> {
+        employer.require_auth();
+        assert!(!params.is_empty(), "params must not be empty");
+
+        let now = env.ledger().timestamp();
+        let mut ids: Vec<u64> = Vec::new(&env);
+
+        for p in params.iter() {
+            assert!(p.deposit > 0, "deposit must be positive");
+            assert!(p.rate_per_second > 0, "rate must be positive");
+            if p.stop_time > 0 {
+                assert!(p.stop_time > now, "stop_time must be in the future");
+            }
+
+            let token_client = token::Client::new(&env, &p.token);
+            token_client.balance(&employer); // SEP-41 probe
+            token_client.transfer(&employer, &env.current_contract_address(), &p.deposit);
+
+            let id = next_id(&env);
+            let stream = Stream {
+                id,
+                employer: employer.clone(),
+                employee: p.employee.clone(),
+                token: p.token.clone(),
+                deposit: p.deposit,
+                withdrawn: 0,
+                rate_per_second: p.rate_per_second,
+                start_time: now,
+                stop_time: p.stop_time,
+                last_withdraw_time: now,
+                status: StreamStatus::Active,
+            };
+            save_stream(&env, &stream);
+            events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second);
+            ids.push_back(id);
+        }
+
+        ids
+    }
+
     /// Employee withdraws all claimable tokens earned so far.
     ///
     /// # Reentrancy analysis
