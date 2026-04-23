@@ -167,3 +167,45 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
+
+#[test]
+fn test_withdraw_after_stop_time_drains_exact_remaining() {
+    // Deposit = 500, rate = 10/s, stop_time = now+50 → max earnable = 500
+    // Advance 200s past stop_time; withdraw should return exactly 500 (no more, no less)
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &(now + 50));
+
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, 500); // exactly the full deposit, not more
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Exhausted);
+}
+
+#[test]
+fn test_no_funds_locked_after_stop_time() {
+    // After stop_time, employee withdraws all; claimable must be 0 and deposit fully accounted for
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let id = client.create_stream(&employer, &employee, &token_id, &300, &10, &(now + 30));
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employee, &id);
+
+    // No further claimable — nothing locked
+    assert_eq!(client.claimable(&id), 0);
+    let s = client.get_stream(&id);
+    assert_eq!(s.withdrawn, s.deposit); // all funds accounted for
+}
