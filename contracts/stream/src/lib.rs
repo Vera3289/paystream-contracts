@@ -267,6 +267,13 @@ impl StreamContract {
         claimable_amount(&stream, env.ledger().timestamp())
     }
 
+    /// How many tokens would be claimable at an arbitrary timestamp.
+    /// Useful for UI projections (future) and auditing (past).
+    pub fn claimable_at(env: Env, stream_id: u64, timestamp: u64) -> i128 {
+        let stream = load_stream(&env, stream_id).expect("stream not found");
+        storage_claimable_at(&stream, timestamp)
+    }
+
     /// Total streams created.
     pub fn stream_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::StreamCount).unwrap_or(0)
