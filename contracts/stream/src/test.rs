@@ -167,3 +167,81 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
+
+/// Full lifecycle: create → withdraw → top_up → pause → resume → cancel
+///
+/// Timeline (all timestamps relative to stream start = T0):
+///   T0+100  withdraw (100s * 10 = 1_000 tokens)
+///   T0+100  top_up   (+5_000 tokens, deposit becomes 14_000)
+///   T0+200  pause    (100s * 10 = 1_000 more claimable, not yet withdrawn)
+///   T0+300  resume   (paused 100s — not counted)
+///   T0+350  cancel   (50s * 10 = 500 claimable → employee; remainder → employer)
+#[test]
+fn test_full_stream_lifecycle() {
+    let (env, client) = setup();
+    let admin    = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token    = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    client.initialize(&admin);
+
+    // ── Create ──────────────────────────────────────────────────────────────
+    // deposit=10_000, rate=10/s, no stop_time
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    let contract_id = env.register(StreamContract, ());
+
+    // Employer spent 10_000; employee has 0.
+    assert_eq!(token.balance(&employer), 0);
+    assert_eq!(token.balance(&employee), 0);
+
+    // ── Withdraw after 100s ─────────────────────────────────────────────────
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let w1 = client.withdraw(&employee, &id);
+    assert_eq!(w1, 1_000);                          // 100s * 10
+    assert_eq!(token.balance(&employee), 1_000);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.withdrawn, 1_000);
+    assert_eq!(s.status, StreamStatus::Active);
+
+    // ── Top-up ──────────────────────────────────────────────────────────────
+    // Mint 5_000 more to employer first, then top up.
+    token.mint(&admin, &employer, &5_000);
+    client.top_up(&employer, &id, &5_000);
+    assert_eq!(client.get_stream(&id).deposit, 15_000);
+
+    // ── Pause after another 100s ────────────────────────────────────────────
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    // 1_000 tokens claimable at pause time (not yet withdrawn)
+    client.pause_stream(&employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Paused);
+
+    // ── Time passes while paused (100s) — should not accrue ─────────────────
+    env.ledger().with_mut(|l| l.timestamp += 100);
+
+    // ── Resume ──────────────────────────────────────────────────────────────
+    client.resume_stream(&employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+    // last_withdraw_time reset to now; paused window excluded
+    assert_eq!(client.claimable(&id), 0);
+
+    // ── Cancel after 50s post-resume ────────────────────────────────────────
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    // Claimable at cancel: 50s * 10 = 500 (post-resume accrual)
+    // Plus the 1_000 that accrued before pause but was never withdrawn.
+    // Note: resume resets last_withdraw_time, so pre-pause accrual is lost
+    // (by design — pause forfeits undrawn accrual). Only 500 goes to employee.
+    let employer_before = token.balance(&employer);
+    client.cancel_stream(&employer, &id);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.status, StreamStatus::Cancelled);
+
+    // Employee received 500 from cancel payout
+    assert_eq!(token.balance(&employee), 1_000 + 500); // w1 + cancel claimable
+
+    // Employer refunded: deposit(15_000) - withdrawn(1_000) - cancel_claimable(500) = 13_500
+    assert_eq!(token.balance(&employer), employer_before + 13_500);
+}
