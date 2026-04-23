@@ -90,6 +90,24 @@ make lint
 
 ---
 
+### Docker (no local Rust/Stellar CLI required)
+
+Build and test entirely inside Docker — no local Rust or Stellar CLI installation needed.
+
+**Run tests:**
+```bash
+docker compose run --rm test
+```
+
+**Build contracts only:**
+```bash
+docker compose run --rm build stellar contract build
+```
+
+The `cargo-cache` volume persists the Cargo registry between runs so subsequent builds are fast.
+
+---
+
 ## Stream Contract Reference
 
 ### Functions
