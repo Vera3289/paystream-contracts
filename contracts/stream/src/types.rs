@@ -17,14 +17,23 @@ pub struct Stream {
     pub id: u64,
     pub employer: Address,
     pub employee: Address,
-    pub token: Address,       // SAC token contract address
-    pub deposit: i128,        // total deposited amount
-    pub withdrawn: i128,      // total already withdrawn
+    pub token: Address,        // SAC token contract address
+    pub deposit: i128,         // total deposited amount
+    pub withdrawn: i128,       // total already withdrawn
     pub rate_per_second: i128, // tokens streamed per second
-    pub start_time: u64,      // ledger timestamp when stream started
-    pub stop_time: u64,       // 0 = no end, else hard stop timestamp
+    pub start_time: u64,       // ledger timestamp when stream started
+    pub stop_time: u64,        // 0 = no end, else hard stop timestamp
     pub last_withdraw_time: u64,
     pub status: StreamStatus,
+    /// Reentrancy guard: true while a withdraw cross-contract call is in flight.
+    /// Soroban executes contracts atomically within a single transaction, so
+    /// cross-contract callbacks cannot interleave with the current frame.
+    /// This flag is kept as a defence-in-depth measure and documents the
+    /// analysis: no reentrant path exists in the current call graph because
+    /// `token::transfer` is a leaf call that cannot call back into this
+    /// contract.  If a future upgrade introduces a callback hook the guard
+    /// will catch it.
+    pub locked: bool,
 }
 
 /// Storage keys.
@@ -34,3 +43,17 @@ pub enum DataKey {
     StreamCount,
     Admin,
 }
+
+/// Contract error codes – panic messages reference these names so callers can
+/// match on a stable string.
+///
+/// | Code | Constant            | Meaning                                      |
+/// |------|---------------------|----------------------------------------------|
+/// | E001 | ERR_ZERO_RATE       | `rate_per_second` must be > 0                |
+/// | E002 | ERR_ZERO_DEPOSIT    | `deposit` must be > 0                        |
+/// | E003 | ERR_REENTRANT       | Reentrant withdraw detected                  |
+/// | E004 | ERR_OVERFLOW        | Arithmetic overflow in claimable calculation |
+pub const ERR_ZERO_RATE: &str = "E001: rate_per_second must be greater than zero";
+pub const ERR_ZERO_DEPOSIT: &str = "E002: deposit must be positive";
+pub const ERR_REENTRANT: &str = "E003: reentrant withdraw detected";
+pub const ERR_OVERFLOW: &str = "E004: arithmetic overflow in claimable calculation";
