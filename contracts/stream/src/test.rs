@@ -30,6 +30,7 @@ fn test_create_stream() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &3600, &1, &0);
     assert_eq!(id, 1);
     assert_eq!(client.stream_count(), 1);
@@ -85,6 +86,7 @@ fn test_stream_exhausted_when_fully_withdrawn() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
@@ -166,4 +168,35 @@ fn test_cannot_withdraw_from_cancelled_stream() {
 
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
+}
+
+// ── Issue #29: minimum deposit tests ─────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "deposit below minimum")]
+fn test_create_stream_rejects_below_min_deposit() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // Default min is 10_000; deposit of 1 must be rejected
+    client.create_stream(&employer, &employee, &token_id, &1, &1, &0);
+}
+
+#[test]
+fn test_admin_can_update_min_deposit() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // Lower the minimum so a small deposit is accepted
+    client.set_min_deposit(&admin, &100);
+    let id = client.create_stream(&employer, &employee, &token_id, &500, &1, &0);
+    assert_eq!(client.get_stream(&id).deposit, 500);
 }

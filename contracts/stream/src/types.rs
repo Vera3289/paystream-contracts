@@ -33,4 +33,5 @@ pub enum DataKey {
     Stream(u64),
     StreamCount,
     Admin,
+    MinDeposit,
 }

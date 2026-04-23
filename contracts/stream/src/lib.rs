@@ -8,7 +8,7 @@ mod types;
 mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin};
+use storage::{claimable_amount, get_admin, get_min_deposit, load_stream, next_id, save_stream, set_admin, set_min_deposit};
 use types::{DataKey, Stream, StreamStatus};
 
 #[contract]
@@ -36,6 +36,7 @@ impl StreamContract {
         employer.require_auth();
         assert!(deposit > 0, "deposit must be positive");
         assert!(rate_per_second > 0, "rate must be positive");
+        assert!(deposit >= get_min_deposit(&env), "deposit below minimum");
 
         let now = env.ledger().timestamp();
         if stop_time > 0 {
@@ -180,5 +181,13 @@ impl StreamContract {
     /// Total streams created.
     pub fn stream_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::StreamCount).unwrap_or(0)
+    }
+
+    /// Admin updates the minimum deposit required to create a stream.
+    pub fn set_min_deposit(env: Env, admin: Address, amount: i128) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not the admin");
+        assert!(amount > 0, "min deposit must be positive");
+        set_min_deposit(&env, amount);
     }
 }
