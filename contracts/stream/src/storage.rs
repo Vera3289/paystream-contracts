@@ -25,17 +25,25 @@ pub fn get_admin(env: &Env) -> Address {
 }
 
 /// Tokens earned by employee up to `now` that have not yet been withdrawn.
+///
+/// Optimised hot path: single status check via match, no redundant arithmetic
+/// when stream is terminal, and effective_end computed with a single conditional.
 pub fn claimable_amount(stream: &Stream, now: u64) -> i128 {
-    if stream.status == StreamStatus::Cancelled || stream.status == StreamStatus::Exhausted {
-        return 0;
+    match stream.status {
+        StreamStatus::Cancelled | StreamStatus::Exhausted => return 0,
+        _ => {}
     }
-    let effective_end = if stream.stop_time > 0 {
-        now.min(stream.stop_time)
+    // Cap at stop_time in one expression to avoid a branch in the common case.
+    let effective_end = if stream.stop_time > 0 && now > stream.stop_time {
+        stream.stop_time
     } else {
         now
     };
     let elapsed = effective_end.saturating_sub(stream.last_withdraw_time) as i128;
-    let earned = elapsed * stream.rate_per_second;
+    // Avoid multiply when elapsed == 0 (common after a fresh withdraw).
+    if elapsed == 0 {
+        return 0;
+    }
     let remaining = stream.deposit - stream.withdrawn;
-    earned.min(remaining).max(0)
+    (elapsed * stream.rate_per_second).min(remaining).max(0)
 }

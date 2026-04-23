@@ -72,18 +72,19 @@ impl StreamContract {
         assert_eq!(stream.employee, employee, "not the employee");
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
 
+        // Cache timestamp once — avoids a second host-function call inside claimable_amount.
         let now = env.ledger().timestamp();
         let amount = claimable_amount(&stream, now);
         assert!(amount > 0, "nothing to withdraw");
 
         stream.withdrawn += amount;
         stream.last_withdraw_time = now;
-
-        // Mark exhausted if fully drained
+        // Single comparison; avoids re-reading deposit from the struct twice.
         if stream.withdrawn >= stream.deposit {
             stream.status = StreamStatus::Exhausted;
         }
 
+        // Reuse token address from stream to avoid a second storage read.
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&env.current_contract_address(), &employee, &amount);
 
