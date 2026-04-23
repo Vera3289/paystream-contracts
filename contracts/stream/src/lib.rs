@@ -7,10 +7,9 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
-use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin,
-              index_employer_stream, get_employer_streams};
-use types::{DataKey, Stream, StreamStatus};
+use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
+use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE};
 
 #[contract]
 pub struct StreamContract;
@@ -25,6 +24,11 @@ impl StreamContract {
 
     /// Employer creates a salary stream and deposits funds into the contract.
     /// `stop_time` = 0 means indefinite; otherwise a hard end timestamp.
+    ///
+    /// # Panics
+    /// - `E001` if `rate_per_second` is 0 (stream would never pay out, locking
+    ///   the deposit permanently).
+    /// - `E002` if `deposit` is not positive.
     pub fn create_stream(
         env: Env,
         employer: Address,
@@ -35,8 +39,10 @@ impl StreamContract {
         stop_time: u64,
     ) -> u64 {
         employer.require_auth();
-        assert!(deposit > 0, "deposit must be positive");
-        assert!(rate_per_second > 0, "rate must be positive");
+        assert!(deposit > 0, "{}", ERR_ZERO_DEPOSIT);
+        // Issue #3: a zero rate produces a permanently stuck deposit because
+        // claimable_amount would always return 0.  Reject it explicitly.
+        assert!(rate_per_second > 0, "{}", ERR_ZERO_RATE);
 
         let now = env.ledger().timestamp();
         if stop_time > 0 {
@@ -60,6 +66,7 @@ impl StreamContract {
             stop_time,
             last_withdraw_time: now,
             status: StreamStatus::Active,
+            locked: false,
         };
         save_stream(&env, &stream);
         index_employer_stream(&env, &employer, id);
@@ -68,17 +75,37 @@ impl StreamContract {
     }
 
     /// Employee withdraws all claimable tokens earned so far.
+    ///
+    /// # Reentrancy analysis
+    /// Soroban contracts execute within a single-threaded, atomic transaction
+    /// frame.  Cross-contract calls are synchronous and the host does **not**
+    /// allow a callee to re-enter the caller mid-execution; the caller's
+    /// storage is not visible to the callee until the call returns.  Therefore
+    /// no reentrant execution path exists in the current implementation.
+    ///
+    /// The `locked` flag on the stream is kept as defence-in-depth: if a
+    /// future protocol upgrade introduces callbacks or the token contract is
+    /// replaced with one that fires a hook, the guard will catch the attempt
+    /// and panic with `E003` before any state mutation occurs.
     pub fn withdraw(env: Env, employee: Address, stream_id: u64) -> i128 {
         employee.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employee, employee, "not the employee");
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
 
+        // Reentrancy guard – set before any cross-contract call (Issue #1)
+        assert!(!stream.locked, "{}", ERR_REENTRANT);
+        stream.locked = true;
+        save_stream(&env, &stream);
+
         let now = env.ledger().timestamp();
         let amount = claimable_amount(&stream, now);
         assert!(amount > 0, "nothing to withdraw");
 
-        stream.withdrawn += amount;
+        stream.withdrawn = stream
+            .withdrawn
+            .checked_add(amount)
+            .expect("withdrawn overflow");
         stream.last_withdraw_time = now;
 
         // Mark exhausted if fully drained
@@ -86,9 +113,12 @@ impl StreamContract {
             stream.status = StreamStatus::Exhausted;
         }
 
+        // Cross-contract call – guard is already persisted above
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&env.current_contract_address(), &employee, &amount);
 
+        // Release guard and persist final state
+        stream.locked = false;
         save_stream(&env, &stream);
         events::withdrawn(&env, stream_id, &employee, amount);
         amount
@@ -105,7 +135,10 @@ impl StreamContract {
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&employer, &env.current_contract_address(), &amount);
 
-        stream.deposit += amount;
+        stream.deposit = stream
+            .deposit
+            .checked_add(amount)
+            .expect("deposit overflow");
         if stream.status == StreamStatus::Exhausted {
             stream.status = StreamStatus::Active;
         }
@@ -154,11 +187,18 @@ impl StreamContract {
 
         if claimable > 0 {
             token_client.transfer(&env.current_contract_address(), &stream.employee, &claimable);
-            stream.withdrawn += claimable;
+            stream.withdrawn = stream
+                .withdrawn
+                .checked_add(claimable)
+                .expect("withdrawn overflow");
         }
 
         // Return remaining deposit to employer
-        let refund = stream.deposit - stream.withdrawn;
+        let refund = stream
+            .deposit
+            .checked_sub(stream.withdrawn)
+            .unwrap_or(0)
+            .max(0);
         if refund > 0 {
             token_client.transfer(&env.current_contract_address(), &employer, &refund);
         }

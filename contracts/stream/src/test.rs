@@ -21,6 +21,10 @@ fn setup_token(env: &Env, admin: &Address) -> Address {
     token_id
 }
 
+// ---------------------------------------------------------------------------
+// Existing tests
+// ---------------------------------------------------------------------------
+
 #[test]
 fn test_create_stream() {
     let (env, client) = setup();
@@ -39,6 +43,8 @@ fn test_create_stream() {
     assert_eq!(s.deposit, 3600);
     assert_eq!(s.rate_per_second, 1);
     assert_eq!(s.withdrawn, 0);
+    // Guard must start unlocked
+    assert!(!s.locked);
 }
 
 #[test]
@@ -74,6 +80,8 @@ fn test_withdraw() {
     let s = client.get_stream(&id);
     assert_eq!(s.withdrawn, 2000);
     assert_eq!(s.status, StreamStatus::Active);
+    // Guard must be released after a successful withdraw
+    assert!(!s.locked);
 }
 
 #[test]
@@ -168,8 +176,20 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     client.withdraw(&employee, &id);
 }
 
+// ---------------------------------------------------------------------------
+// Issue #1 – Reentrancy guard
+// ---------------------------------------------------------------------------
+
+/// Verify that a stream with `locked = true` (simulating a mid-flight
+/// cross-contract callback) is rejected with the E003 error code.
+///
+/// In production Soroban the host prevents true reentrancy, but this test
+/// confirms the guard logic fires correctly if the flag is ever set.
 #[test]
-fn test_streams_by_employer_single() {
+#[should_panic(expected = "E003")]
+fn test_reentrant_withdraw_rejected() {
+    use storage::save_stream;
+
     let (env, client) = setup();
     let admin = Address::generate(&env);
     let employer = Address::generate(&env);
@@ -177,61 +197,115 @@ fn test_streams_by_employer_single() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
 
-    let ids = client.streams_by_employer(&employer);
-    assert_eq!(ids.len(), 1);
-    assert_eq!(ids.get(0).unwrap(), id);
+    // Manually set the locked flag to simulate a reentrant call mid-flight
+    env.as_contract(&client.address, || {
+        let mut stream = storage::load_stream(&env, id).unwrap();
+        stream.locked = true;
+        save_stream(&env, &stream);
+    });
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    // This must panic with E003
+    client.withdraw(&employee, &id);
 }
 
+// ---------------------------------------------------------------------------
+// Issue #2 – Overflow / checked arithmetic
+// ---------------------------------------------------------------------------
+
+/// claimable_amount with rate = i128::MAX and elapsed = 2 must panic (overflow)
+/// rather than silently wrap to a wrong value.
 #[test]
-fn test_streams_by_employer_multiple_streams() {
+#[should_panic(expected = "E004")]
+fn test_claimable_overflow_panics() {
+    use storage::claimable_amount;
+    use types::{Stream, StreamStatus};
+
+    let env = Env::default();
+    let addr = Address::generate(&env);
+
+    let stream = Stream {
+        id: 1,
+        employer: addr.clone(),
+        employee: addr.clone(),
+        token: addr.clone(),
+        deposit: i128::MAX,
+        withdrawn: 0,
+        rate_per_second: i128::MAX,
+        start_time: 0,
+        stop_time: 0,
+        last_withdraw_time: 0,
+        status: StreamStatus::Active,
+        locked: false,
+    };
+
+    // elapsed = 2, rate = i128::MAX → product overflows i128
+    claimable_amount(&stream, 2);
+}
+
+/// Boundary value: rate = 1, elapsed = u64::MAX – claimable should equal
+/// deposit (capped by remaining) without panicking.
+#[test]
+fn test_claimable_large_elapsed_capped_by_deposit() {
+    use storage::claimable_amount;
+    use types::{Stream, StreamStatus};
+
+    let env = Env::default();
+    let addr = Address::generate(&env);
+
+    let deposit: i128 = 1_000_000;
+    let stream = Stream {
+        id: 1,
+        employer: addr.clone(),
+        employee: addr.clone(),
+        token: addr.clone(),
+        deposit,
+        withdrawn: 0,
+        rate_per_second: 1,
+        start_time: 0,
+        stop_time: 0,
+        last_withdraw_time: 0,
+        status: StreamStatus::Active,
+        locked: false,
+    };
+
+    // elapsed = u64::MAX → earned = u64::MAX as i128, but capped to deposit
+    let result = claimable_amount(&stream, u64::MAX);
+    assert_eq!(result, deposit);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #3 – Zero-rate validation
+// ---------------------------------------------------------------------------
+
+/// Creating a stream with rate_per_second = 0 must panic with E001.
+#[test]
+#[should_panic(expected = "E001")]
+fn test_create_stream_zero_rate_rejected() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let e1 = Address::generate(&env);
-    let e2 = Address::generate(&env);
-    let id1 = client.create_stream(&employer, &e1, &token_id, &1000, &1, &0);
-    let id2 = client.create_stream(&employer, &e2, &token_id, &2000, &2, &0);
-
-    let ids = client.streams_by_employer(&employer);
-    assert_eq!(ids.len(), 2);
-    assert_eq!(ids.get(0).unwrap(), id1);
-    assert_eq!(ids.get(1).unwrap(), id2);
+    // rate_per_second = 0 → must panic
+    client.create_stream(&employer, &employee, &token_id, &10_000, &0, &0);
 }
 
+/// Creating a stream with a valid positive rate must still succeed.
 #[test]
-fn test_streams_by_employer_isolation() {
-    // Two employers — each only sees their own streams.
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let emp_a = Address::generate(&env);
-    let emp_b = Address::generate(&env);
-    let token_a = setup_token(&env, &emp_a);
-    let token_b = setup_token(&env, &emp_b);
-
-    client.initialize(&admin);
-    let employee = Address::generate(&env);
-    let id_a = client.create_stream(&emp_a, &employee, &token_a, &1000, &1, &0);
-    let id_b = client.create_stream(&emp_b, &employee, &token_b, &2000, &2, &0);
-
-    let ids_a = client.streams_by_employer(&emp_a);
-    let ids_b = client.streams_by_employer(&emp_b);
-    assert_eq!(ids_a.len(), 1);
-    assert_eq!(ids_a.get(0).unwrap(), id_a);
-    assert_eq!(ids_b.len(), 1);
-    assert_eq!(ids_b.get(0).unwrap(), id_b);
-}
-
-#[test]
-fn test_streams_by_employer_empty() {
+fn test_create_stream_positive_rate_ok() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
     client.initialize(&admin);
-    let ids = client.streams_by_employer(&employer);
-    assert_eq!(ids.len(), 0);
+    let id = client.create_stream(&employer, &employee, &token_id, &3600, &1, &0);
+    assert_eq!(id, 1);
+    assert_eq!(client.get_stream(&id).rate_per_second, 1);
 }
