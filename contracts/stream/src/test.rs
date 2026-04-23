@@ -34,6 +34,7 @@ fn test_create_stream() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &3600, &1, &0);
     assert_eq!(id, 1);
     assert_eq!(client.stream_count(), 1);
@@ -93,6 +94,7 @@ fn test_stream_exhausted_when_fully_withdrawn() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0);
 
     env.ledger().with_mut(|l| l.timestamp += 100);

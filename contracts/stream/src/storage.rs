@@ -1,6 +1,9 @@
 use soroban_sdk::{Env, Address};
 use crate::types::{DataKey, Stream, StreamStatus, ERR_OVERFLOW};
 
+/// Default minimum deposit (10_000 stroops = 0.001 XLM equivalent).
+pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
+
 pub fn save_stream(env: &Env, stream: &Stream) {
     env.storage().persistent().set(&DataKey::Stream(stream.id), stream);
 }
@@ -25,6 +28,14 @@ pub fn set_admin(env: &Env, admin: &Address) {
 #[allow(dead_code)]
 pub fn get_admin(env: &Env) -> Address {
     env.storage().instance().get(&DataKey::Admin).expect("admin not set")
+}
+
+pub fn get_min_deposit(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::MinDeposit).unwrap_or(DEFAULT_MIN_DEPOSIT)
+}
+
+pub fn set_min_deposit(env: &Env, amount: i128) {
+    env.storage().instance().set(&DataKey::MinDeposit, &amount);
 }
 
 /// Tokens earned by employee up to `now` that have not yet been withdrawn.
