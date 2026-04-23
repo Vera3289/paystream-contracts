@@ -8,8 +8,8 @@ mod types;
 mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, get_admin, get_min_deposit, load_stream, next_id, save_stream, set_admin, set_min_deposit};
-use types::{DataKey, Stream, StreamStatus};
+use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
+use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE};
 
 #[contract]
 pub struct StreamContract;
@@ -24,6 +24,11 @@ impl StreamContract {
 
     /// Employer creates a salary stream and deposits funds into the contract.
     /// `stop_time` = 0 means indefinite; otherwise a hard end timestamp.
+    ///
+    /// # Panics
+    /// - `E001` if `rate_per_second` is 0 (stream would never pay out, locking
+    ///   the deposit permanently).
+    /// - `E002` if `deposit` is not positive.
     pub fn create_stream(
         env: Env,
         employer: Address,
@@ -34,17 +39,20 @@ impl StreamContract {
         stop_time: u64,
     ) -> u64 {
         employer.require_auth();
-        assert!(deposit > 0, "deposit must be positive");
-        assert!(rate_per_second > 0, "rate must be positive");
-        assert!(deposit >= get_min_deposit(&env), "deposit below minimum");
+        assert!(deposit > 0, "{}", ERR_ZERO_DEPOSIT);
+        // Issue #3: a zero rate produces a permanently stuck deposit because
+        // claimable_amount would always return 0.  Reject it explicitly.
+        assert!(rate_per_second > 0, "{}", ERR_ZERO_RATE);
 
         let now = env.ledger().timestamp();
         if stop_time > 0 {
             assert!(stop_time > now, "stop_time must be in the future");
         }
 
-        // Pull deposit from employer into this contract
+        // Validate token is SEP-41 compliant by probing the balance interface,
+        // then pull deposit from employer into this contract.
         let token_client = token::Client::new(&env, &token_address);
+        token_client.balance(&employer); // panics if token is not SEP-41
         token_client.transfer(&employer, &env.current_contract_address(), &deposit);
 
         let id = next_id(&env);
@@ -60,34 +68,105 @@ impl StreamContract {
             stop_time,
             last_withdraw_time: now,
             status: StreamStatus::Active,
+            locked: false,
         };
         save_stream(&env, &stream);
+        index_employer_stream(&env, &employer, id);
         events::stream_created(&env, id, &employer, &employee, rate_per_second);
         id
     }
 
+    /// Employer creates multiple salary streams atomically in a single transaction.
+    /// All streams succeed or the entire transaction reverts — no partial state.
+    /// Returns the list of newly created stream IDs in the same order as `params`.
+    pub fn create_streams_batch(
+        env: Env,
+        employer: Address,
+        params: Vec<StreamParams>,
+    ) -> Vec<u64> {
+        employer.require_auth();
+        assert!(!params.is_empty(), "params must not be empty");
+
+        let now = env.ledger().timestamp();
+        let mut ids: Vec<u64> = Vec::new(&env);
+
+        for p in params.iter() {
+            assert!(p.deposit > 0, "deposit must be positive");
+            assert!(p.rate_per_second > 0, "rate must be positive");
+            if p.stop_time > 0 {
+                assert!(p.stop_time > now, "stop_time must be in the future");
+            }
+
+            let token_client = token::Client::new(&env, &p.token);
+            token_client.balance(&employer); // SEP-41 probe
+            token_client.transfer(&employer, &env.current_contract_address(), &p.deposit);
+
+            let id = next_id(&env);
+            let stream = Stream {
+                id,
+                employer: employer.clone(),
+                employee: p.employee.clone(),
+                token: p.token.clone(),
+                deposit: p.deposit,
+                withdrawn: 0,
+                rate_per_second: p.rate_per_second,
+                start_time: now,
+                stop_time: p.stop_time,
+                last_withdraw_time: now,
+                status: StreamStatus::Active,
+            };
+            save_stream(&env, &stream);
+            events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second);
+            ids.push_back(id);
+        }
+
+        ids
+    }
+
     /// Employee withdraws all claimable tokens earned so far.
+    ///
+    /// # Reentrancy analysis
+    /// Soroban contracts execute within a single-threaded, atomic transaction
+    /// frame.  Cross-contract calls are synchronous and the host does **not**
+    /// allow a callee to re-enter the caller mid-execution; the caller's
+    /// storage is not visible to the callee until the call returns.  Therefore
+    /// no reentrant execution path exists in the current implementation.
+    ///
+    /// The `locked` flag on the stream is kept as defence-in-depth: if a
+    /// future protocol upgrade introduces callbacks or the token contract is
+    /// replaced with one that fires a hook, the guard will catch the attempt
+    /// and panic with `E003` before any state mutation occurs.
     pub fn withdraw(env: Env, employee: Address, stream_id: u64) -> i128 {
         employee.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employee, employee, "not the employee");
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
 
+        // Reentrancy guard – set before any cross-contract call (Issue #1)
+        assert!(!stream.locked, "{}", ERR_REENTRANT);
+        stream.locked = true;
+        save_stream(&env, &stream);
+
         let now = env.ledger().timestamp();
         let amount = claimable_amount(&stream, now);
         assert!(amount > 0, "nothing to withdraw");
 
-        stream.withdrawn += amount;
+        stream.withdrawn = stream
+            .withdrawn
+            .checked_add(amount)
+            .expect("withdrawn overflow");
         stream.last_withdraw_time = now;
-
-        // Mark exhausted if fully drained
+        // Single comparison; avoids re-reading deposit from the struct twice.
         if stream.withdrawn >= stream.deposit {
             stream.status = StreamStatus::Exhausted;
         }
 
+        // Cross-contract call – guard is already persisted above
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&env.current_contract_address(), &employee, &amount);
 
+        // Release guard and persist final state
+        stream.locked = false;
         save_stream(&env, &stream);
         events::withdrawn(&env, stream_id, &employee, amount);
         amount
@@ -104,7 +183,10 @@ impl StreamContract {
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&employer, &env.current_contract_address(), &amount);
 
-        stream.deposit += amount;
+        stream.deposit = stream
+            .deposit
+            .checked_add(amount)
+            .expect("deposit overflow");
         if stream.status == StreamStatus::Exhausted {
             stream.status = StreamStatus::Active;
         }
@@ -153,11 +235,18 @@ impl StreamContract {
 
         if claimable > 0 {
             token_client.transfer(&env.current_contract_address(), &stream.employee, &claimable);
-            stream.withdrawn += claimable;
+            stream.withdrawn = stream
+                .withdrawn
+                .checked_add(claimable)
+                .expect("withdrawn overflow");
         }
 
         // Return remaining deposit to employer
-        let refund = stream.deposit - stream.withdrawn;
+        let refund = stream
+            .deposit
+            .checked_sub(stream.withdrawn)
+            .unwrap_or(0)
+            .max(0);
         if refund > 0 {
             token_client.transfer(&env.current_contract_address(), &employer, &refund);
         }
@@ -183,11 +272,9 @@ impl StreamContract {
         env.storage().instance().get(&DataKey::StreamCount).unwrap_or(0)
     }
 
-    /// Admin updates the minimum deposit required to create a stream.
-    pub fn set_min_deposit(env: Env, admin: Address, amount: i128) {
-        admin.require_auth();
-        assert_eq!(get_admin(&env), admin, "not the admin");
-        assert!(amount > 0, "min deposit must be positive");
-        set_min_deposit(&env, amount);
+    /// Return all stream IDs owned by `employer`. O(n) in the number of their streams,
+    /// not the total stream count — backed by a per-employer index.
+    pub fn streams_by_employer(env: Env, employer: Address) -> Vec<u64> {
+        get_employer_streams(&env, &employer)
     }
 }
