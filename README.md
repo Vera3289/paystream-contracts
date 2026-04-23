@@ -16,6 +16,7 @@ PayStream lets employers stream salaries to employees in real-time, per-second. 
 - **Transparent** — every stream, withdrawal, and cancellation is an immutable on-chain event
 - **Stellar-native** — built on Stellar's fast, low-fee infrastructure with Soroban smart contracts
 - **Flexible** — pause, resume, top-up, or cancel streams; optional hard stop time
+- **Multi-token** — each stream can use any [SEP-41](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0041.md) compliant token; employer and employee can run concurrent streams in different assets
 
 ---
 
