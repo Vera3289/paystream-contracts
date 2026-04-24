@@ -8,7 +8,7 @@ mod types;
 mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
-use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
+use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin, get_admin, set_pending_admin, get_pending_admin, clear_pending_admin};
 use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED};
 
 #[contract]
@@ -20,6 +20,22 @@ impl StreamContract {
     pub fn initialize(env: Env, admin: Address) {
         admin.require_auth();
         set_admin(&env, &admin);
+    }
+
+    /// Step 1 of two-step admin transfer: current admin proposes a new admin.
+    pub fn propose_admin(env: Env, new_admin: Address) {
+        let current = get_admin(&env);
+        current.require_auth();
+        set_pending_admin(&env, &new_admin);
+    }
+
+    /// Step 2 of two-step admin transfer: proposed admin accepts and becomes admin.
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        new_admin.require_auth();
+        let pending = get_pending_admin(&env).expect("no pending admin");
+        assert_eq!(pending, new_admin, "not the pending admin");
+        set_admin(&env, &new_admin);
+        clear_pending_admin(&env);
     }
 
     /// Admin pauses the entire contract — blocks new streams and withdrawals.

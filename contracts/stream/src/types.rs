@@ -42,10 +42,12 @@ pub enum DataKey {
     Stream(u64),
     StreamCount,
     Admin,
+    PendingAdmin,
     /// Index: employer address → Vec<u64> of stream IDs they own.
     EmployerStreams(Address),
     /// Index: employee address → Vec<u64> of stream IDs paying them.
     EmployeeStreams(Address),
+    MinDeposit,
 }
 
 /// Contract error codes – panic messages reference these names so callers can

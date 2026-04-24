@@ -30,6 +30,18 @@ pub fn get_admin(env: &Env) -> Address {
     env.storage().instance().get(&DataKey::Admin).expect("admin not set")
 }
 
+pub fn set_pending_admin(env: &Env, pending: &Address) {
+    env.storage().instance().set(&DataKey::PendingAdmin, pending);
+}
+
+pub fn get_pending_admin(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::PendingAdmin)
+}
+
+pub fn clear_pending_admin(env: &Env) {
+    env.storage().instance().remove(&DataKey::PendingAdmin);
+}
+
 pub fn get_min_deposit(env: &Env) -> i128 {
     env.storage().instance().get(&DataKey::MinDeposit).unwrap_or(DEFAULT_MIN_DEPOSIT)
 }
