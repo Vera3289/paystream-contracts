@@ -7,9 +7,9 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, get_admin, is_paused, load_stream, next_id, save_stream, set_admin, set_paused};
-use types::{DataKey, Stream, StreamStatus};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
+use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
+use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED};
 
 #[contract]
 pub struct StreamContract;
@@ -40,6 +40,11 @@ impl StreamContract {
 
     /// Employer creates a salary stream and deposits funds into the contract.
     /// `stop_time` = 0 means indefinite; otherwise a hard end timestamp.
+    ///
+    /// # Panics
+    /// - `E001` if `rate_per_second` is 0 (stream would never pay out, locking
+    ///   the deposit permanently).
+    /// - `E002` if `deposit` is not positive.
     pub fn create_stream(
         env: Env,
         employer: Address,
@@ -50,17 +55,20 @@ impl StreamContract {
         stop_time: u64,
     ) -> u64 {
         employer.require_auth();
-        assert!(!is_paused(&env), "contract is paused");
-        assert!(deposit > 0, "deposit must be positive");
-        assert!(rate_per_second > 0, "rate must be positive");
+        assert!(deposit > 0, "{}", ERR_ZERO_DEPOSIT);
+        // Issue #3: a zero rate produces a permanently stuck deposit because
+        // claimable_amount would always return 0.  Reject it explicitly.
+        assert!(rate_per_second > 0, "{}", ERR_ZERO_RATE);
 
         let now = env.ledger().timestamp();
         if stop_time > 0 {
             assert!(stop_time > now, "stop_time must be in the future");
         }
 
-        // Pull deposit from employer into this contract
+        // Validate token is SEP-41 compliant by probing the balance interface,
+        // then pull deposit from employer into this contract.
         let token_client = token::Client::new(&env, &token_address);
+        token_client.balance(&employer); // panics if token is not SEP-41
         token_client.transfer(&employer, &env.current_contract_address(), &deposit);
 
         let id = next_id(&env);
@@ -76,35 +84,114 @@ impl StreamContract {
             stop_time,
             last_withdraw_time: now,
             status: StreamStatus::Active,
+            locked: false,
         };
         save_stream(&env, &stream);
+        index_employer_stream(&env, &employer, id);
+        index_employee_stream(&env, &employee, id);
         events::stream_created(&env, id, &employer, &employee, rate_per_second);
         id
     }
 
+    /// Employer creates multiple salary streams atomically in a single transaction.
+    /// All streams succeed or the entire transaction reverts — no partial state.
+    /// Returns the list of newly created stream IDs in the same order as `params`.
+    pub fn create_streams_batch(
+        env: Env,
+        employer: Address,
+        params: Vec<StreamParams>,
+    ) -> Vec<u64> {
+        employer.require_auth();
+        assert!(!params.is_empty(), "params must not be empty");
+
+        let now = env.ledger().timestamp();
+        let mut ids: Vec<u64> = Vec::new(&env);
+
+        for p in params.iter() {
+            assert!(p.deposit > 0, "deposit must be positive");
+            assert!(p.rate_per_second > 0, "rate must be positive");
+            if p.stop_time > 0 {
+                assert!(p.stop_time > now, "stop_time must be in the future");
+            }
+
+            let token_client = token::Client::new(&env, &p.token);
+            token_client.balance(&employer); // SEP-41 probe
+            token_client.transfer(&employer, &env.current_contract_address(), &p.deposit);
+
+            let id = next_id(&env);
+            let stream = Stream {
+                id,
+                employer: employer.clone(),
+                employee: p.employee.clone(),
+                token: p.token.clone(),
+                deposit: p.deposit,
+                withdrawn: 0,
+                rate_per_second: p.rate_per_second,
+                start_time: now,
+                stop_time: p.stop_time,
+                last_withdraw_time: now,
+                status: StreamStatus::Active,
+            };
+            save_stream(&env, &stream);
+            events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second);
+            ids.push_back(id);
+        }
+
+        ids
+    }
+
     /// Employee withdraws all claimable tokens earned so far.
+    ///
+    /// # Reentrancy analysis
+    /// Soroban contracts execute within a single-threaded, atomic transaction
+    /// frame.  Cross-contract calls are synchronous and the host does **not**
+    /// allow a callee to re-enter the caller mid-execution; the caller's
+    /// storage is not visible to the callee until the call returns.  Therefore
+    /// no reentrant execution path exists in the current implementation.
+    ///
+    /// The `locked` flag on the stream is kept as defence-in-depth: if a
+    /// future protocol upgrade introduces callbacks or the token contract is
+    /// replaced with one that fires a hook, the guard will catch the attempt
+    /// and panic with `E003` before any state mutation occurs.
     pub fn withdraw(env: Env, employee: Address, stream_id: u64) -> i128 {
         employee.require_auth();
         assert!(!is_paused(&env), "contract is paused");
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employee, employee, "not the employee");
-        assert_eq!(stream.status, StreamStatus::Active, "stream not active");
+        // Issue #10: exhausted streams have nothing left to withdraw — return 0
+        // gracefully instead of panicking. Cancelled streams still reject.
+        assert!(
+            stream.status == StreamStatus::Active || stream.status == StreamStatus::Exhausted,
+            "stream not active"
+        );
 
         let now = env.ledger().timestamp();
         let amount = claimable_amount(&stream, now);
-        assert!(amount > 0, "nothing to withdraw");
+        if amount == 0 {
+            return 0;
+        }
 
-        stream.withdrawn += amount;
+        // Reentrancy guard – set before any cross-contract call (Issue #1)
+        assert!(!stream.locked, "{}", ERR_REENTRANT);
+        stream.locked = true;
+        save_stream(&env, &stream);
+
+        stream.withdrawn = stream
+            .withdrawn
+            .checked_add(amount)
+            .expect("withdrawn overflow");
         stream.last_withdraw_time = now;
-
-        // Mark exhausted if fully drained
+        // Single comparison; avoids re-reading deposit from the struct twice.
         if stream.withdrawn >= stream.deposit {
             stream.status = StreamStatus::Exhausted;
         }
 
+        // Cross-contract call – guard is already persisted above
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&env.current_contract_address(), &employee, &amount);
 
+        // Release guard and persist final state
+        stream.locked = false;
         save_stream(&env, &stream);
         events::withdrawn(&env, stream_id, &employee, amount);
         amount
@@ -115,16 +202,18 @@ impl StreamContract {
         employer.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employer, employer, "not the employer");
-        assert_eq!(stream.status, StreamStatus::Active, "stream not active");
+        // Issue #11: reject cancelled and exhausted streams with descriptive errors
+        assert!(stream.status != StreamStatus::Cancelled, "{}", ERR_STREAM_CANCELLED);
+        assert!(stream.status != StreamStatus::Exhausted, "{}", ERR_STREAM_EXHAUSTED);
         assert!(amount > 0, "amount must be positive");
 
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&employer, &env.current_contract_address(), &amount);
 
-        stream.deposit += amount;
-        if stream.status == StreamStatus::Exhausted {
-            stream.status = StreamStatus::Active;
-        }
+        stream.deposit = stream
+            .deposit
+            .checked_add(amount)
+            .expect("deposit overflow");
         save_stream(&env, &stream);
         events::topped_up(&env, stream_id, &employer, amount);
     }
@@ -170,11 +259,18 @@ impl StreamContract {
 
         if claimable > 0 {
             token_client.transfer(&env.current_contract_address(), &stream.employee, &claimable);
-            stream.withdrawn += claimable;
+            stream.withdrawn = stream
+                .withdrawn
+                .checked_add(claimable)
+                .expect("withdrawn overflow");
         }
 
         // Return remaining deposit to employer
-        let refund = stream.deposit - stream.withdrawn;
+        let refund = stream
+            .deposit
+            .checked_sub(stream.withdrawn)
+            .unwrap_or(0)
+            .max(0);
         if refund > 0 {
             token_client.transfer(&env.current_contract_address(), &employer, &refund);
         }
@@ -195,8 +291,58 @@ impl StreamContract {
         claimable_amount(&stream, env.ledger().timestamp())
     }
 
+    /// How many tokens would be claimable at an arbitrary timestamp.
+    /// Useful for UI projections (future) and auditing (past).
+    pub fn claimable_at(env: Env, stream_id: u64, timestamp: u64) -> i128 {
+        let stream = load_stream(&env, stream_id).expect("stream not found");
+        storage_claimable_at(&stream, timestamp)
+    }
+
+    /// Admin upgrades the contract WASM in-place.
+    ///
+    /// All existing stream state (streams, indices, admin) is preserved because
+    /// Soroban's upgrade mechanism only replaces the executable code — persistent
+    /// and instance storage entries are untouched.
+    ///
+    /// After uploading the new WASM with `stellar contract upload`, call:
+    /// ```
+    /// stellar contract invoke -- upgrade --new_wasm_hash <HASH>
+    /// ```
+    /// If the new version requires data-model changes, call `migrate` immediately
+    /// after `upgrade` in the same or a follow-up transaction.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("admin not set");
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    /// No-op migration hook called after an upgrade when the new version needs
+    /// to initialise new storage fields or transform existing data.
+    ///
+    /// Override this function in the upgraded WASM with the actual migration
+    /// logic. The base implementation is intentionally empty so that upgrades
+    /// that require no data changes can skip calling it.
+    pub fn migrate(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).expect("admin not set");
+        assert_eq!(admin, stored_admin, "not the admin");
+        // No-op in the base version; override in upgraded WASM as needed.
+    }
+
     /// Total streams created.
     pub fn stream_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::StreamCount).unwrap_or(0)
+    }
+
+    /// Return all stream IDs owned by `employer`. O(n) in the number of their streams,
+    /// not the total stream count — backed by a per-employer index.
+    pub fn streams_by_employer(env: Env, employer: Address) -> Vec<u64> {
+        get_employer_streams(&env, &employer)
+    }
+
+    /// Return all stream IDs paying `employee`. O(n) in the number of their streams,
+    /// backed by a per-employee index updated on every create_stream call.
+    pub fn streams_by_employee(env: Env, employee: Address) -> Vec<u64> {
+        get_employee_streams(&env, &employee)
     }
 }
