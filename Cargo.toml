@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "contracts/stream",
     "contracts/token",
+    "contracts/stream/fuzz",
 ]
 
 [workspace.dependencies]
