@@ -385,3 +385,54 @@ fn test_create_stream_positive_rate_ok() {
     assert_eq!(id, 1);
     assert_eq!(client.get_stream(&id).rate_per_second, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #28 – streams_by_employee index
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_streams_by_employee_single() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    let ids = client.streams_by_employee(&employee);
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids.get(0).unwrap(), id);
+}
+
+#[test]
+fn test_streams_by_employee_multiple() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id1 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    let id2 = client.create_stream(&employer, &employee, &token_id, &5_000, &5, &0);
+    let id3 = client.create_stream(&employer, &employee, &token_id, &3_000, &3, &0);
+
+    let ids = client.streams_by_employee(&employee);
+    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.get(0).unwrap(), id1);
+    assert_eq!(ids.get(1).unwrap(), id2);
+    assert_eq!(ids.get(2).unwrap(), id3);
+}
+
+#[test]
+fn test_streams_by_employee_empty_for_unknown() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let stranger = Address::generate(&env);
+    let ids = client.streams_by_employee(&stranger);
+    assert_eq!(ids.len(), 0);
+}
