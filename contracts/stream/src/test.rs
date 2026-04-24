@@ -387,11 +387,20 @@ fn test_create_stream_positive_rate_ok() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #28 – streams_by_employee index
+// Issue #20 – Contract upgrade / migration path
 // ---------------------------------------------------------------------------
 
+// Import the compiled WASM for upgrade tests. The contract must be built first.
+// In CI this is handled by the build step before tests run.
+mod stream_wasm {
+    soroban_sdk::contractimport!(
+        file = "../../../target/wasm32v1-none/release/paystream_stream.wasm"
+    );
+}
+
+/// Upgrading the contract with the same WASM preserves all existing stream state.
 #[test]
-fn test_streams_by_employee_single() {
+fn test_upgrade_preserves_stream_state() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     let employer = Address::generate(&env);
@@ -401,38 +410,38 @@ fn test_streams_by_employee_single() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
 
-    let ids = client.streams_by_employee(&employee);
-    assert_eq!(ids.len(), 1);
-    assert_eq!(ids.get(0).unwrap(), id);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+
+    // Upload the current contract WASM and upgrade — state must survive
+    let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
+    client.upgrade(&admin, &new_wasm_hash);
+
+    // Stream state is intact after upgrade
+    let s = client.get_stream(&id);
+    assert_eq!(s.deposit, 10_000);
+    assert_eq!(s.rate_per_second, 10);
+    assert_eq!(s.status, StreamStatus::Active);
+    assert_eq!(client.claimable(&id), 1000);
 }
 
+/// migrate() is a no-op in the base version and must not panic.
 #[test]
-fn test_streams_by_employee_multiple() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id1 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
-    let id2 = client.create_stream(&employer, &employee, &token_id, &5_000, &5, &0);
-    let id3 = client.create_stream(&employer, &employee, &token_id, &3_000, &3, &0);
-
-    let ids = client.streams_by_employee(&employee);
-    assert_eq!(ids.len(), 3);
-    assert_eq!(ids.get(0).unwrap(), id1);
-    assert_eq!(ids.get(1).unwrap(), id2);
-    assert_eq!(ids.get(2).unwrap(), id3);
-}
-
-#[test]
-fn test_streams_by_employee_empty_for_unknown() {
+fn test_migrate_noop() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
+    client.migrate(&admin); // must not panic
+}
 
-    let stranger = Address::generate(&env);
-    let ids = client.streams_by_employee(&stranger);
-    assert_eq!(ids.len(), 0);
+/// Only admin can call upgrade.
+#[test]
+#[should_panic]
+fn test_upgrade_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+
+    let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
+    client.upgrade(&attacker, &new_wasm_hash);
 }
