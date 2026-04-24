@@ -34,8 +34,16 @@ jobs:
       - name: Build contracts
         run: stellar contract build
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd target/wasm32-unknown-unknown/release
+          sha256sum *.wasm > checksums.sha256
+          cat checksums.sha256
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/wasm32-unknown-unknown/release/*.wasm
+          files: |
+            target/wasm32-unknown-unknown/release/*.wasm
+            target/wasm32-unknown-unknown/release/checksums.sha256
           generate_release_notes: true
