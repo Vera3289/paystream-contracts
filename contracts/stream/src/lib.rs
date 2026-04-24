@@ -22,6 +22,22 @@ impl StreamContract {
         set_admin(&env, &admin);
     }
 
+    /// Admin pauses the entire contract — blocks new streams and withdrawals.
+    pub fn pause_contract(env: Env) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        set_paused(&env, true);
+        events::contract_paused(&env, true);
+    }
+
+    /// Admin unpauses the contract, restoring normal operation.
+    pub fn unpause_contract(env: Env) {
+        let admin = get_admin(&env);
+        admin.require_auth();
+        set_paused(&env, false);
+        events::contract_paused(&env, false);
+    }
+
     /// Employer creates a salary stream and deposits funds into the contract.
     /// `stop_time` = 0 means indefinite; otherwise a hard end timestamp.
     ///
@@ -139,6 +155,7 @@ impl StreamContract {
     /// and panic with `E003` before any state mutation occurs.
     pub fn withdraw(env: Env, employee: Address, stream_id: u64) -> i128 {
         employee.require_auth();
+        assert!(!is_paused(&env), "contract is paused");
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employee, employee, "not the employee");
         // Issue #10: exhausted streams have nothing left to withdraw — return 0
