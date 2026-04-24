@@ -253,6 +253,49 @@ fn test_cannot_withdraw_from_cancelled_stream() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #10 – Withdraw on exhausted stream returns 0 gracefully
+// ---------------------------------------------------------------------------
+
+/// Withdrawing from an already-exhausted stream must return 0, not panic.
+#[test]
+fn test_withdraw_exhausted_returns_zero() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &100);
+    let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0);
+
+    // Exhaust the stream
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employee, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Exhausted);
+
+    // Second withdraw on exhausted stream must return 0, no panic, no transfer
+    let result = client.withdraw(&employee, &id);
+    assert_eq!(result, 0);
+}
+
+/// Withdrawing from a cancelled stream must still panic (not graceful).
+#[test]
+#[should_panic(expected = "stream not active")]
+fn test_withdraw_cancelled_still_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    client.cancel_stream(&employer, &id);
+    client.withdraw(&employee, &id);
+}
+
+// ---------------------------------------------------------------------------
 // Issue #1 – Reentrancy guard
 // ---------------------------------------------------------------------------
 
