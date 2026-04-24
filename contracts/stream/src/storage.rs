@@ -1,15 +1,29 @@
-use soroban_sdk::{Env, Address};
-use crate::types::{DataKey, Stream, StreamStatus, ERR_OVERFLOW};
+use soroban_sdk::{Env, Address, Vec};
+use crate::types::{DataKey, Stream, StreamStatus, ERR_OVERFLOW, ERR_BAD_NONCE};
 
 /// Default minimum deposit (10_000 stroops = 0.001 XLM equivalent).
 pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
 
+/// Persistent storage TTL thresholds (in ledgers).
+/// Stellar produces ~1 ledger/5 s → 1 year ≈ 6_307_200 ledgers.
+/// We keep stream data alive for at least 1 year and extend to 2 years on
+/// every active-stream operation so long-running streams never expire.
+const TTL_THRESHOLD: u32 = 6_307_200;   // ~1 year
+const TTL_EXTEND_TO: u32 = 12_614_400;  // ~2 years
+
 pub fn save_stream(env: &Env, stream: &Stream) {
-    env.storage().persistent().set(&DataKey::Stream(stream.id), stream);
+    let key = DataKey::Stream(stream.id);
+    env.storage().persistent().set(&key, stream);
+    env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 pub fn load_stream(env: &Env, id: u64) -> Option<Stream> {
-    env.storage().persistent().get(&DataKey::Stream(id))
+    let key = DataKey::Stream(id);
+    let stream: Option<Stream> = env.storage().persistent().get(&key);
+    if stream.is_some() {
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    stream
 }
 
 pub fn next_id(env: &Env) -> u64 {
@@ -92,6 +106,7 @@ pub fn index_employer_stream(env: &Env, employer: &Address, stream_id: u64) {
     let mut ids: Vec<u64> = env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
     ids.push_back(stream_id);
     env.storage().persistent().set(&key, &ids);
+    env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 /// Return all stream IDs owned by `employer`.
@@ -106,10 +121,30 @@ pub fn index_employee_stream(env: &Env, employee: &Address, stream_id: u64) {
     let mut ids: Vec<u64> = env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
     ids.push_back(stream_id);
     env.storage().persistent().set(&key, &ids);
+    env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 /// Return all stream IDs paying `employee`.
 pub fn get_employee_streams(env: &Env, employee: &Address) -> Vec<u64> {
     let key = DataKey::EmployeeStreams(employee.clone());
     env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env))
+}
+
+// ---------------------------------------------------------------------------
+// Admin nonce helpers (issue #70 — replay attack protection)
+// ---------------------------------------------------------------------------
+
+/// Return the current admin nonce (0 if never set).
+pub fn get_admin_nonce(env: &Env) -> u64 {
+    env.storage().instance().get(&DataKey::AdminNonce).unwrap_or(0u64)
+}
+
+/// Verify `nonce` equals the stored nonce, then increment it atomically.
+///
+/// # Panics
+/// - E009 if `nonce` does not match the expected value.
+pub fn consume_admin_nonce(env: &Env, nonce: u64) {
+    let expected = get_admin_nonce(env);
+    assert!(nonce == expected, "{}", ERR_BAD_NONCE);
+    env.storage().instance().set(&DataKey::AdminNonce, &(expected + 1));
 }

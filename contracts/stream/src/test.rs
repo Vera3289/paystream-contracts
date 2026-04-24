@@ -22,7 +22,7 @@ fn setup_token(env: &Env, admin: &Address) -> Address {
 }
 
 // ---------------------------------------------------------------------------
-// Existing tests
+// Existing tests (updated for nonce-aware admin calls)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -34,7 +34,7 @@ fn test_create_stream() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    client.set_min_deposit(&admin, &100);
+    client.set_min_deposit(&admin, &0, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &3600, &1, &0);
     assert_eq!(id, 1);
     assert_eq!(client.stream_count(), 1);
@@ -44,7 +44,6 @@ fn test_create_stream() {
     assert_eq!(s.deposit, 3600);
     assert_eq!(s.rate_per_second, 1);
     assert_eq!(s.withdrawn, 0);
-    // Guard must start unlocked
     assert!(!s.locked);
 }
 
@@ -81,7 +80,6 @@ fn test_withdraw() {
     let s = client.get_stream(&id);
     assert_eq!(s.withdrawn, 2000);
     assert_eq!(s.status, StreamStatus::Active);
-    // Guard must be released after a successful withdraw
     assert!(!s.locked);
 }
 
@@ -94,7 +92,7 @@ fn test_stream_exhausted_when_fully_withdrawn() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    client.set_min_deposit(&admin, &100);
+    client.set_min_deposit(&admin, &0, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
@@ -117,13 +115,11 @@ fn test_pause_and_resume() {
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.pause_stream(&employer, &id);
 
-    // Time passes while paused — should not accrue
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.resume_stream(&employer, &id);
 
-    // 50s after resume
     env.ledger().with_mut(|l| l.timestamp += 50);
-    assert_eq!(client.claimable(&id), 500); // only 50s counted
+    assert_eq!(client.claimable(&id), 500);
 }
 
 #[test]
@@ -142,7 +138,7 @@ fn test_cancel_stream_refunds_employer() {
 
     let s = client.get_stream(&id);
     assert_eq!(s.status, StreamStatus::Cancelled);
-    assert_eq!(s.withdrawn, 1000); // 100s * 10
+    assert_eq!(s.withdrawn, 1000);
 }
 
 #[test]
@@ -158,10 +154,9 @@ fn test_stop_time_caps_claimable() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &(now + 50));
 
     env.ledger().with_mut(|l| l.timestamp += 200);
-    assert_eq!(client.claimable(&id), 500); // capped at 50s * 10
+    assert_eq!(client.claimable(&id), 500);
 }
 
-/// Issue #15: paused 100s must not count toward claimable
 #[test]
 fn test_pause_excludes_paused_time() {
     let (env, client) = setup();
@@ -173,18 +168,15 @@ fn test_pause_excludes_paused_time() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
 
-    // 50s active → pause → 100s paused → resume → 50s active
     env.ledger().with_mut(|l| l.timestamp += 50);
     client.pause_stream(&employer, &id);
-    env.ledger().with_mut(|l| l.timestamp += 100); // paused — must not count
+    env.ledger().with_mut(|l| l.timestamp += 100);
     client.resume_stream(&employer, &id);
     env.ledger().with_mut(|l| l.timestamp += 50);
 
-    // Only 50 + 50 = 100s of active time counted
     assert_eq!(client.claimable(&id), 1000);
 }
 
-/// Issue #15: multiple pause/resume cycles all exclude paused time
 #[test]
 fn test_multiple_pause_resume_cycles() {
     let (env, client) = setup();
@@ -196,26 +188,21 @@ fn test_multiple_pause_resume_cycles() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
 
-    // cycle 1: 30s active, 200s paused
     env.ledger().with_mut(|l| l.timestamp += 30);
     client.pause_stream(&employer, &id);
     env.ledger().with_mut(|l| l.timestamp += 200);
     client.resume_stream(&employer, &id);
 
-    // cycle 2: 20s active, 300s paused
     env.ledger().with_mut(|l| l.timestamp += 20);
     client.pause_stream(&employer, &id);
     env.ledger().with_mut(|l| l.timestamp += 300);
     client.resume_stream(&employer, &id);
 
-    // 40s active after last resume
     env.ledger().with_mut(|l| l.timestamp += 40);
 
-    // Only 30 + 20 + 40 = 90s of active time → 900 tokens
     assert_eq!(client.claimable(&id), 900);
 }
 
-/// Issue #15: withdraw during pause returns 0 new accrual
 #[test]
 #[should_panic(expected = "stream not active")]
 fn test_withdraw_during_pause_panics() {
@@ -231,7 +218,6 @@ fn test_withdraw_during_pause_panics() {
     env.ledger().with_mut(|l| l.timestamp += 50);
     client.pause_stream(&employer, &id);
     env.ledger().with_mut(|l| l.timestamp += 100);
-    // withdraw while paused must fail
     client.withdraw(&employee, &id);
 }
 
@@ -252,11 +238,6 @@ fn test_cannot_withdraw_from_cancelled_stream() {
     client.withdraw(&employee, &id);
 }
 
-// ---------------------------------------------------------------------------
-// Issue #10 – Withdraw on exhausted stream returns 0 gracefully
-// ---------------------------------------------------------------------------
-
-/// Withdrawing from an already-exhausted stream must return 0, not panic.
 #[test]
 fn test_withdraw_exhausted_returns_zero() {
     let (env, client) = setup();
@@ -266,20 +247,17 @@ fn test_withdraw_exhausted_returns_zero() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    client.set_min_deposit(&admin, &100);
+    client.set_min_deposit(&admin, &0, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0);
 
-    // Exhaust the stream
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
     assert_eq!(client.get_stream(&id).status, StreamStatus::Exhausted);
 
-    // Second withdraw on exhausted stream must return 0, no panic, no transfer
     let result = client.withdraw(&employee, &id);
     assert_eq!(result, 0);
 }
 
-/// Withdrawing from a cancelled stream must still panic (not graceful).
 #[test]
 #[should_panic(expected = "stream not active")]
 fn test_withdraw_cancelled_still_panics() {
@@ -295,15 +273,6 @@ fn test_withdraw_cancelled_still_panics() {
     client.withdraw(&employee, &id);
 }
 
-// ---------------------------------------------------------------------------
-// Issue #1 – Reentrancy guard
-// ---------------------------------------------------------------------------
-
-/// Verify that a stream with `locked = true` (simulating a mid-flight
-/// cross-contract callback) is rejected with the E003 error code.
-///
-/// In production Soroban the host prevents true reentrancy, but this test
-/// confirms the guard logic fires correctly if the flag is ever set.
 #[test]
 #[should_panic(expected = "E003")]
 fn test_reentrant_withdraw_rejected() {
@@ -318,7 +287,6 @@ fn test_reentrant_withdraw_rejected() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
 
-    // Manually set the locked flag to simulate a reentrant call mid-flight
     env.as_contract(&client.address, || {
         let mut stream = storage::load_stream(&env, id).unwrap();
         stream.locked = true;
@@ -326,16 +294,9 @@ fn test_reentrant_withdraw_rejected() {
     });
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    // This must panic with E003
     client.withdraw(&employee, &id);
 }
 
-// ---------------------------------------------------------------------------
-// Issue #2 – Overflow / checked arithmetic
-// ---------------------------------------------------------------------------
-
-/// claimable_amount with rate = i128::MAX and elapsed = 2 must panic (overflow)
-/// rather than silently wrap to a wrong value.
 #[test]
 #[should_panic(expected = "E004")]
 fn test_claimable_overflow_panics() {
@@ -360,12 +321,9 @@ fn test_claimable_overflow_panics() {
         locked: false,
     };
 
-    // elapsed = 2, rate = i128::MAX → product overflows i128
     claimable_amount(&stream, 2);
 }
 
-/// Boundary value: rate = 1, elapsed = u64::MAX – claimable should equal
-/// deposit (capped by remaining) without panicking.
 #[test]
 fn test_claimable_large_elapsed_capped_by_deposit() {
     use storage::claimable_amount;
@@ -390,16 +348,10 @@ fn test_claimable_large_elapsed_capped_by_deposit() {
         locked: false,
     };
 
-    // elapsed = u64::MAX → earned = u64::MAX as i128, but capped to deposit
     let result = claimable_amount(&stream, u64::MAX);
     assert_eq!(result, deposit);
 }
 
-// ---------------------------------------------------------------------------
-// Issue #3 – Zero-rate validation
-// ---------------------------------------------------------------------------
-
-/// Creating a stream with rate_per_second = 0 must panic with E001.
 #[test]
 #[should_panic(expected = "E001")]
 fn test_create_stream_zero_rate_rejected() {
@@ -410,11 +362,9 @@ fn test_create_stream_zero_rate_rejected() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    // rate_per_second = 0 → must panic
     client.create_stream(&employer, &employee, &token_id, &10_000, &0, &0);
 }
 
-/// Creating a stream with a valid positive rate must still succeed.
 #[test]
 fn test_create_stream_positive_rate_ok() {
     let (env, client) = setup();
@@ -430,18 +380,121 @@ fn test_create_stream_positive_rate_ok() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #70 – Admin nonce / replay attack protection
+// ---------------------------------------------------------------------------
+
+/// Nonce starts at 0 and increments after each admin op.
+#[test]
+fn test_admin_nonce_increments() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(client.admin_nonce(), 0);
+    client.set_min_deposit(&admin, &0, &500);
+    assert_eq!(client.admin_nonce(), 1);
+    client.set_min_deposit(&admin, &1, &1000);
+    assert_eq!(client.admin_nonce(), 2);
+}
+
+/// Replaying an already-consumed nonce must be rejected with E009.
+#[test]
+#[should_panic(expected = "E009")]
+fn test_replayed_admin_nonce_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    client.set_min_deposit(&admin, &0, &500); // nonce 0 consumed
+    client.set_min_deposit(&admin, &0, &500); // replay → must panic
+}
+
+/// pause_contract and unpause_contract consume the nonce.
+#[test]
+fn test_pause_unpause_consume_nonce() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    client.pause_contract(&0);
+    assert_eq!(client.admin_nonce(), 1);
+    client.unpause_contract(&1);
+    assert_eq!(client.admin_nonce(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #72 – Input validation
+// ---------------------------------------------------------------------------
+
+/// deposit below min_deposit must be rejected with E007.
+#[test]
+#[should_panic(expected = "E007")]
+fn test_create_stream_below_min_deposit_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &10_000);
+    // deposit = 100 < min_deposit = 10_000 → E007
+    client.create_stream(&employer, &employee, &token_id, &100, &1, &0);
+}
+
+/// rate_per_second above MAX_RATE_PER_SECOND must be rejected with E008.
+#[test]
+#[should_panic(expected = "E008")]
+fn test_create_stream_rate_too_high_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // 1_000_000_001 > MAX_RATE_PER_SECOND → E008
+    client.create_stream(&employer, &employee, &token_id, &1_000_000_000_000, &1_000_000_001, &0);
+}
+
+/// employer == employee must be rejected.
+#[test]
+#[should_panic(expected = "employer and employee must differ")]
+fn test_create_stream_same_employer_employee_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.create_stream(&employer, &employer, &token_id, &10_000, &1, &0);
+}
+
+/// top_up with amount = 0 must be rejected.
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn test_top_up_zero_amount_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &1, &0);
+    client.top_up(&employer, &id, &0);
+}
+
+// ---------------------------------------------------------------------------
 // Issue #20 – Contract upgrade / migration path
 // ---------------------------------------------------------------------------
 
-// Import the compiled WASM for upgrade tests. The contract must be built first.
-// In CI this is handled by the build step before tests run.
 mod stream_wasm {
     soroban_sdk::contractimport!(
         file = "../../../target/wasm32v1-none/release/paystream_stream.wasm"
     );
 }
 
-/// Upgrading the contract with the same WASM preserves all existing stream state.
 #[test]
 fn test_upgrade_preserves_stream_state() {
     let (env, client) = setup();
@@ -455,11 +508,9 @@ fn test_upgrade_preserves_stream_state() {
 
     env.ledger().with_mut(|l| l.timestamp += 100);
 
-    // Upload the current contract WASM and upgrade — state must survive
     let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
-    client.upgrade(&admin, &new_wasm_hash);
+    client.upgrade(&admin, &new_wasm_hash, &0);
 
-    // Stream state is intact after upgrade
     let s = client.get_stream(&id);
     assert_eq!(s.deposit, 10_000);
     assert_eq!(s.rate_per_second, 10);
@@ -467,16 +518,14 @@ fn test_upgrade_preserves_stream_state() {
     assert_eq!(client.claimable(&id), 1000);
 }
 
-/// migrate() is a no-op in the base version and must not panic.
 #[test]
 fn test_migrate_noop() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
-    client.migrate(&admin); // must not panic
+    client.migrate(&admin);
 }
 
-/// Only admin can call upgrade.
 #[test]
 #[should_panic]
 fn test_upgrade_non_admin_rejected() {
@@ -486,7 +535,7 @@ fn test_upgrade_non_admin_rejected() {
     client.initialize(&admin);
 
     let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
-    client.upgrade(&attacker, &new_wasm_hash);
+    client.upgrade(&attacker, &new_wasm_hash, &0);
 }
 
 // ---------------------------------------------------------------------------
