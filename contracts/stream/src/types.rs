@@ -61,3 +61,5 @@ pub const ERR_ZERO_RATE: &str = "E001: rate_per_second must be greater than zero
 pub const ERR_ZERO_DEPOSIT: &str = "E002: deposit must be positive";
 pub const ERR_REENTRANT: &str = "E003: reentrant withdraw detected";
 pub const ERR_OVERFLOW: &str = "E004: arithmetic overflow in claimable calculation";
+pub const ERR_STREAM_CANCELLED: &str = "E005: cannot top up a cancelled stream";
+pub const ERR_STREAM_EXHAUSTED: &str = "E006: cannot top up an exhausted stream";
