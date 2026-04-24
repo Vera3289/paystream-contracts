@@ -61,11 +61,24 @@ impl TokenContract {
         set_total_supply(&env, total_supply(&env) + amount);
     }
 
-    pub fn burn(env: Env, admin: Address, from: Address, amount: i128) {
-        admin.require_auth();
-        assert_eq!(get_admin(&env), admin, "not admin");
+    pub fn burn(env: Env, from: Address, amount: i128) {
+        from.require_auth();
+        assert!(amount > 0, "amount must be positive");
         let bal = balance_of(&env, &from);
         assert!(bal >= amount, "insufficient balance");
+        set_balance(&env, &from, bal - amount);
+        set_total_supply(&env, total_supply(&env) - amount);
+    }
+
+    /// Burn tokens on behalf of `from` using an existing allowance.
+    pub fn burn_from(env: Env, spender: Address, from: Address, amount: i128) {
+        spender.require_auth();
+        assert!(amount > 0, "amount must be positive");
+        let allowed = allowance(&env, &from, &spender);
+        assert!(allowed >= amount, "allowance exceeded");
+        let bal = balance_of(&env, &from);
+        assert!(bal >= amount, "insufficient balance");
+        set_allowance(&env, &from, &spender, allowed - amount);
         set_balance(&env, &from, bal - amount);
         set_total_supply(&env, total_supply(&env) - amount);
     }
