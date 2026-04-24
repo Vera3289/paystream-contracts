@@ -537,3 +537,44 @@ fn test_upgrade_non_admin_rejected() {
     let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
     client.upgrade(&attacker, &new_wasm_hash, &0);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #19 – Two-step admin transfer
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_admin_transfer_full_flow() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    client.propose_admin(&new_admin);
+    client.accept_admin(&new_admin);
+
+    // new_admin can now call propose_admin (proves they are admin)
+    let another = Address::generate(&env);
+    client.propose_admin(&another); // would panic if new_admin is not admin
+}
+
+#[test]
+#[should_panic]
+fn test_propose_admin_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+    client.propose_admin(&attacker); // attacker tries to propose themselves
+}
+
+#[test]
+#[should_panic(expected = "not the pending admin")]
+fn test_accept_admin_wrong_address_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+    client.propose_admin(&new_admin);
+    client.accept_admin(&attacker); // wrong address
+}

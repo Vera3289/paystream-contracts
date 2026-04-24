@@ -42,6 +42,22 @@ impl StreamContract {
         set_admin(&env, &admin);
     }
 
+    /// Step 1 of two-step admin transfer: current admin proposes a new admin.
+    pub fn propose_admin(env: Env, new_admin: Address) {
+        let current = get_admin(&env);
+        current.require_auth();
+        set_pending_admin(&env, &new_admin);
+    }
+
+    /// Step 2 of two-step admin transfer: proposed admin accepts and becomes admin.
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        new_admin.require_auth();
+        let pending = get_pending_admin(&env).expect("no pending admin");
+        assert_eq!(pending, new_admin, "not the pending admin");
+        set_admin(&env, &new_admin);
+        clear_pending_admin(&env);
+    }
+
     /// Admin pauses the entire contract — blocks new streams and withdrawals.
     /// `nonce` must equal the current admin nonce (replay protection).
     pub fn pause_contract(env: Env, nonce: u64) {

@@ -63,6 +63,7 @@ pub enum DataKey {
     EmployerStreams(Address),
     /// Index: employee address → Vec<u64> of stream IDs paying them.
     EmployeeStreams(Address),
+    MinDeposit,
 }
 
 /// Contract error codes – panic messages reference these names so callers can
