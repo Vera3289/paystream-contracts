@@ -140,16 +140,23 @@ impl StreamContract {
         employee.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employee, employee, "not the employee");
-        assert_eq!(stream.status, StreamStatus::Active, "stream not active");
+        // Issue #10: exhausted streams have nothing left to withdraw — return 0
+        // gracefully instead of panicking. Cancelled streams still reject.
+        assert!(
+            stream.status == StreamStatus::Active || stream.status == StreamStatus::Exhausted,
+            "stream not active"
+        );
+
+        let now = env.ledger().timestamp();
+        let amount = claimable_amount(&stream, now);
+        if amount == 0 {
+            return 0;
+        }
 
         // Reentrancy guard – set before any cross-contract call (Issue #1)
         assert!(!stream.locked, "{}", ERR_REENTRANT);
         stream.locked = true;
         save_stream(&env, &stream);
-
-        let now = env.ledger().timestamp();
-        let amount = claimable_amount(&stream, now);
-        assert!(amount > 0, "nothing to withdraw");
 
         stream.withdrawn = stream
             .withdrawn
