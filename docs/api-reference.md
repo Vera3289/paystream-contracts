@@ -1,0 +1,802 @@
+# API Reference
+
+Full documentation for every PayStream contract function: parameters, return values, errors, and CLI examples.
+
+---
+
+## Stream Contract
+
+### `initialize`
+
+Set the contract admin. Must be called once after deployment before any other function.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Address that will become the contract admin |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if `admin` auth fails
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ADMIN_KEY> --network testnet \
+  -- initialize --admin <ADMIN_ADDRESS>
+```
+
+---
+
+### `propose_admin`
+
+Step 1 of a two-step admin transfer. Current admin nominates a new admin.
+
+**Caller:** Current admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `new_admin` | `Address` | Address being nominated as the next admin |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the current admin
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ADMIN_KEY> --network testnet \
+  -- propose_admin --new_admin <NEW_ADMIN_ADDRESS>
+```
+
+---
+
+### `accept_admin`
+
+Step 2 of a two-step admin transfer. Nominated admin accepts and becomes the new admin.
+
+**Caller:** Nominated (pending) admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `new_admin` | `Address` | Must match the address set by `propose_admin` |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if there is no pending admin
+- Panics if `new_admin` does not match the pending admin
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <NEW_ADMIN_KEY> --network testnet \
+  -- accept_admin --new_admin <NEW_ADMIN_ADDRESS>
+```
+
+---
+
+### `pause_contract`
+
+Admin pauses the entire contract. Blocks `create_stream`, `create_streams_batch`, and `withdraw`.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `nonce` | `u64` | Current admin nonce (replay protection) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `nonce` does not match the stored nonce (E009)
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ADMIN_KEY> --network testnet \
+  -- pause_contract --nonce 0
+```
+
+---
+
+### `unpause_contract`
+
+Admin unpauses the contract, restoring normal operation.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `nonce` | `u64` | Current admin nonce (replay protection) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `nonce` does not match the stored nonce (E009)
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ADMIN_KEY> --network testnet \
+  -- unpause_contract --nonce 1
+```
+
+---
+
+### `set_min_deposit`
+
+Admin sets the minimum deposit enforced on `create_stream`.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must equal the stored admin |
+| `nonce` | `u64` | Current admin nonce (replay protection) |
+| `amount` | `i128` | New minimum deposit (must be > 0) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if `admin` auth fails or does not match stored admin
+- Panics if `nonce` is wrong (E009)
+- Panics if `amount` ≤ 0 (E002)
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ADMIN_KEY> --network testnet \
+  -- set_min_deposit --admin <ADMIN_ADDRESS> --nonce 2 --amount 100000
+```
+
+---
+
+### `create_stream`
+
+Employer creates a salary stream and deposits funds into the contract escrow.
+
+**Caller:** Employer
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Employer address; funds are pulled from here |
+| `employee` | `Address` | Employee address; receives streamed tokens |
+| `token_address` | `Address` | SEP-41 token contract address |
+| `deposit` | `i128` | Total tokens to lock in escrow |
+| `rate_per_second` | `i128` | Tokens streamed per second |
+| `stop_time` | `u64` | Hard stop timestamp (0 = indefinite) |
+
+**Returns:** `u64` — the new stream ID
+
+**Errors:**
+- Panics if contract is paused
+- E002 if `deposit` ≤ 0
+- E007 if `deposit` < minimum deposit
+- E001 if `rate_per_second` ≤ 0
+- E008 if `rate_per_second` > 1,000,000,000
+- Panics if `stop_time` is in the past (when non-zero)
+- Panics if `employer` == `employee`
+- Panics if token transfer fails (insufficient balance or allowance)
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testnet \
+  -- create_stream \
+    --employer <EMPLOYER_ADDRESS> \
+    --employee <EMPLOYEE_ADDRESS> \
+    --token_address <TOKEN_ID> \
+    --deposit 1000000 \
+    --rate_per_second 100 \
+    --stop_time 0
+```
+
+---
+
+### `create_streams_batch`
+
+Employer creates multiple salary streams atomically. All streams succeed or all revert.
+
+**Caller:** Employer
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Employer address |
+| `params` | `Vec<StreamParams>` | List of stream parameters (see below) |
+
+**`StreamParams` fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `employee` | `Address` | Employee address |
+| `token` | `Address` | SEP-41 token contract address |
+| `deposit` | `i128` | Deposit for this stream |
+| `rate_per_second` | `i128` | Tokens per second for this stream |
+| `stop_time` | `u64` | Hard stop timestamp (0 = indefinite) |
+
+**Returns:** `Vec<u64>` — list of new stream IDs in the same order as `params`
+
+**Errors:** Same per-stream validations as `create_stream`; panics if `params` is empty
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testnet \
+  -- create_streams_batch \
+    --employer <EMPLOYER_ADDRESS> \
+    --params '[{"employee":"<ADDR1>","token":"<TOKEN_ID>","deposit":500000,"rate_per_second":50,"stop_time":0},{"employee":"<ADDR2>","token":"<TOKEN_ID>","deposit":500000,"rate_per_second":50,"stop_time":0}]'
+```
+
+---
+
+### `withdraw`
+
+Employee withdraws all claimable tokens earned so far.
+
+**Caller:** Employee
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employee` | `Address` | Must match the stream's employee |
+| `stream_id` | `u64` | ID of the stream to withdraw from |
+
+**Returns:** `i128` — amount transferred (0 if nothing claimable)
+
+**Errors:**
+- Panics if contract is paused
+- Panics if stream not found
+- Panics if caller is not the stream's employee
+- Panics if stream is not Active or Exhausted
+- E003 if a reentrant withdraw is detected
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <EMPLOYEE_KEY> --network testnet \
+  -- withdraw --employee <EMPLOYEE_ADDRESS> --stream_id 1
+```
+
+---
+
+### `top_up`
+
+Employer adds more funds to an active stream.
+
+**Caller:** Employer
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Must match the stream's employer |
+| `stream_id` | `u64` | ID of the stream to top up |
+| `amount` | `i128` | Additional tokens to deposit |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if stream not found
+- Panics if caller is not the stream's employer
+- E005 if stream is Cancelled
+- E006 if stream is Exhausted
+- Panics if `amount` ≤ 0
+- Panics if token transfer fails
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testnet \
+  -- top_up --employer <EMPLOYER_ADDRESS> --stream_id 1 --amount 500000
+```
+
+---
+
+### `pause_stream`
+
+Employer pauses an active stream. Accrual stops until `resume_stream` is called.
+
+**Caller:** Employer
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Must match the stream's employer |
+| `stream_id` | `u64` | ID of the stream to pause |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if stream not found
+- Panics if caller is not the stream's employer
+- Panics if stream is not Active
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testnet \
+  -- pause_stream --employer <EMPLOYER_ADDRESS> --stream_id 1
+```
+
+---
+
+### `resume_stream`
+
+Employer resumes a paused stream. The `last_withdraw_time` is reset to now so paused time is excluded from accrual.
+
+**Caller:** Employer
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Must match the stream's employer |
+| `stream_id` | `u64` | ID of the stream to resume |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if stream not found
+- Panics if caller is not the stream's employer
+- Panics if stream is not Paused
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testnet \
+  -- resume_stream --employer <EMPLOYER_ADDRESS> --stream_id 1
+```
+
+---
+
+### `cancel_stream`
+
+Employer cancels a stream. The employee receives all earned tokens; the employer is refunded the remainder.
+
+**Caller:** Employer
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Must match the stream's employer |
+| `stream_id` | `u64` | ID of the stream to cancel |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if stream not found
+- Panics if caller is not the stream's employer
+- Panics if stream is already Cancelled or Exhausted
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testnet \
+  -- cancel_stream --employer <EMPLOYER_ADDRESS> --stream_id 1
+```
+
+---
+
+### `get_stream`
+
+Read the full state of a stream by ID.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `stream_id` | `u64` | ID of the stream to read |
+
+**Returns:** `Stream` — the stream struct
+
+**`Stream` fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `u64` | Stream ID |
+| `employer` | `Address` | Employer address |
+| `employee` | `Address` | Employee address |
+| `token` | `Address` | Token contract address |
+| `deposit` | `i128` | Total deposited |
+| `withdrawn` | `i128` | Total already withdrawn |
+| `rate_per_second` | `i128` | Tokens streamed per second |
+| `start_time` | `u64` | Ledger timestamp when stream started |
+| `stop_time` | `u64` | Hard stop timestamp (0 = none) |
+| `last_withdraw_time` | `u64` | Timestamp of last withdrawal or resume |
+| `status` | `StreamStatus` | Active / Paused / Cancelled / Exhausted |
+| `locked` | `bool` | Reentrancy guard (always false at rest) |
+
+**Errors:**
+- Panics if stream not found
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- get_stream --stream_id 1
+```
+
+---
+
+### `claimable`
+
+Query how many tokens the employee can withdraw right now.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `stream_id` | `u64` | ID of the stream to query |
+
+**Returns:** `i128` — claimable token amount
+
+**Formula:**
+```
+claimable = min(
+    (now - last_withdraw_time) * rate_per_second,
+    deposit - withdrawn
+)
+```
+Time is capped at `stop_time` when set. Returns 0 for Cancelled or Exhausted streams.
+
+**Errors:**
+- Panics if stream not found
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- claimable --stream_id 1
+```
+
+---
+
+### `claimable_at`
+
+Query how many tokens would be claimable at an arbitrary timestamp.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `stream_id` | `u64` | ID of the stream to query |
+| `timestamp` | `u64` | Hypothetical ledger timestamp |
+
+**Returns:** `i128` — claimable amount at the given timestamp
+
+**Errors:**
+- Panics if stream not found
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- claimable_at --stream_id 1 --timestamp 1800000000
+```
+
+---
+
+### `stream_count`
+
+Total number of streams ever created.
+
+**Caller:** Anyone
+
+**Returns:** `u64`
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- stream_count
+```
+
+---
+
+### `streams_by_employer`
+
+Return all stream IDs owned by an employer.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Employer address to query |
+
+**Returns:** `Vec<u64>`
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- streams_by_employer --employer <EMPLOYER_ADDRESS>
+```
+
+---
+
+### `streams_by_employee`
+
+Return all stream IDs paying an employee.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employee` | `Address` | Employee address to query |
+
+**Returns:** `Vec<u64>`
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- streams_by_employee --employee <EMPLOYEE_ADDRESS>
+```
+
+---
+
+### `admin_nonce`
+
+Return the current admin nonce. Use this to build the next admin transaction.
+
+**Caller:** Anyone
+
+**Returns:** `u64`
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- admin_nonce
+```
+
+---
+
+### `upgrade`
+
+Admin upgrades the contract WASM in-place.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `new_wasm_hash` | `BytesN<32>` | Hash of the new WASM blob (must be uploaded first) |
+| `nonce` | `u64` | Current admin nonce (replay protection) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `nonce` is wrong (E009)
+
+---
+
+### `migrate`
+
+No-op migration hook called by the admin after an upgrade to confirm the new WASM is operational.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+
+**Returns:** nothing
+
+---
+
+## Token Contract
+
+### `initialize`
+
+Initialise the token with an admin and an initial supply minted to the admin.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Token admin address |
+| `initial_supply` | `i128` | Tokens minted to admin on init |
+
+**Returns:** nothing
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
+  -- initialize --admin <ADMIN_ADDRESS> --initial_supply 1000000000
+```
+
+---
+
+### `total_supply`
+
+Return the total token supply.
+
+**Caller:** Anyone
+
+**Returns:** `i128`
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ANY_KEY> --network testnet \
+  -- total_supply
+```
+
+---
+
+### `balance`
+
+Return the token balance of an address.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `owner` | `Address` | Address to query |
+
+**Returns:** `i128`
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ANY_KEY> --network testnet \
+  -- balance --owner <ADDRESS>
+```
+
+---
+
+### `transfer`
+
+Transfer tokens from one address to another.
+
+**Caller:** `from` (requires auth)
+
+| Parameter | Type | Description |
+|---|---|---|
+| `from` | `Address` | Sender |
+| `to` | `Address` | Recipient |
+| `amount` | `i128` | Amount to transfer (must be > 0) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if `amount` ≤ 0
+- Panics if `from` has insufficient balance
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <FROM_KEY> --network testnet \
+  -- transfer --from <FROM_ADDRESS> --to <TO_ADDRESS> --amount 1000
+```
+
+---
+
+### `approve`
+
+Approve a spender to transfer tokens on behalf of the owner.
+
+**Caller:** `owner` (requires auth)
+
+| Parameter | Type | Description |
+|---|---|---|
+| `owner` | `Address` | Token owner |
+| `spender` | `Address` | Address being approved |
+| `amount` | `i128` | Allowance amount |
+
+**Returns:** nothing
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <OWNER_KEY> --network testnet \
+  -- approve --owner <OWNER_ADDRESS> --spender <SPENDER_ADDRESS> --amount 5000
+```
+
+---
+
+### `transfer_from`
+
+Transfer tokens on behalf of `from` using an existing allowance.
+
+**Caller:** `spender` (requires auth)
+
+| Parameter | Type | Description |
+|---|---|---|
+| `spender` | `Address` | Address with an existing allowance |
+| `from` | `Address` | Token owner |
+| `to` | `Address` | Recipient |
+| `amount` | `i128` | Amount to transfer |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if allowance is insufficient
+- Panics if `from` has insufficient balance
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <SPENDER_KEY> --network testnet \
+  -- transfer_from --spender <SPENDER_ADDRESS> --from <FROM_ADDRESS> --to <TO_ADDRESS> --amount 1000
+```
+
+---
+
+### `mint`
+
+Admin mints new tokens to an address, increasing total supply.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+| `to` | `Address` | Recipient of minted tokens |
+| `amount` | `i128` | Amount to mint (must be > 0) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `amount` ≤ 0
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
+  -- mint --admin <ADMIN_ADDRESS> --to <RECIPIENT_ADDRESS> --amount 1000000
+```
+
+---
+
+### `burn`
+
+Burn tokens from the caller's own balance, reducing total supply.
+
+**Caller:** `from` (requires auth)
+
+| Parameter | Type | Description |
+|---|---|---|
+| `from` | `Address` | Address whose tokens are burned |
+| `amount` | `i128` | Amount to burn (must be > 0) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if `amount` ≤ 0
+- Panics if `from` has insufficient balance
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <FROM_KEY> --network testnet \
+  -- burn --from <FROM_ADDRESS> --amount 500
+```
+
+---
+
+### `burn_from`
+
+Burn tokens on behalf of `from` using an existing allowance.
+
+**Caller:** `spender` (requires auth)
+
+| Parameter | Type | Description |
+|---|---|---|
+| `spender` | `Address` | Address with an existing allowance |
+| `from` | `Address` | Token owner whose tokens are burned |
+| `amount` | `i128` | Amount to burn (must be > 0) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if `amount` ≤ 0
+- Panics if allowance is insufficient
+- Panics if `from` has insufficient balance
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <SPENDER_KEY> --network testnet \
+  -- burn_from --spender <SPENDER_ADDRESS> --from <FROM_ADDRESS> --amount 500
+```
+
+---
+
+## Error Codes
+
+| Code | Constant | Meaning |
+|---|---|---|
+| E001 | `ERR_ZERO_RATE` | `rate_per_second` must be > 0 |
+| E002 | `ERR_ZERO_DEPOSIT` | `deposit` must be > 0 |
+| E003 | `ERR_REENTRANT` | Reentrant withdraw detected |
+| E004 | `ERR_OVERFLOW` | Arithmetic overflow in claimable calculation |
+| E005 | `ERR_STREAM_CANCELLED` | Cannot top up a cancelled stream |
+| E006 | `ERR_STREAM_EXHAUSTED` | Cannot top up an exhausted stream |
+| E007 | `ERR_BELOW_MIN_DEPOSIT` | Deposit below minimum |
+| E008 | `ERR_INVALID_RATE` | `rate_per_second` exceeds maximum (1,000,000,000) |
+| E009 | `ERR_BAD_NONCE` | Invalid admin nonce |
+
+---
+
+## Stream Status Lifecycle
+
+```
+Active → Paused → Active
+Active → Cancelled
+Active → Exhausted  (deposit fully streamed)
+Paused → Cancelled
+```
