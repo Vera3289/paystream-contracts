@@ -87,3 +87,17 @@ pub fn get_employer_streams(env: &Env, employer: &Address) -> Vec<u64> {
     let key = DataKey::EmployerStreams(employer.clone());
     env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env))
 }
+
+/// Append `stream_id` to the employee's stream index.
+pub fn index_employee_stream(env: &Env, employee: &Address, stream_id: u64) {
+    let key = DataKey::EmployeeStreams(employee.clone());
+    let mut ids: Vec<u64> = env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+    ids.push_back(stream_id);
+    env.storage().persistent().set(&key, &ids);
+}
+
+/// Return all stream IDs paying `employee`.
+pub fn get_employee_streams(env: &Env, employee: &Address) -> Vec<u64> {
+    let key = DataKey::EmployeeStreams(employee.clone());
+    env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env))
+}

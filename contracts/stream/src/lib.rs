@@ -72,6 +72,7 @@ impl StreamContract {
         };
         save_stream(&env, &stream);
         index_employer_stream(&env, &employer, id);
+        index_employee_stream(&env, &employee, id);
         events::stream_created(&env, id, &employer, &employee, rate_per_second);
         id
     }
@@ -314,5 +315,11 @@ impl StreamContract {
     /// not the total stream count — backed by a per-employer index.
     pub fn streams_by_employer(env: Env, employer: Address) -> Vec<u64> {
         get_employer_streams(&env, &employer)
+    }
+
+    /// Return all stream IDs paying `employee`. O(n) in the number of their streams,
+    /// backed by a per-employee index updated on every create_stream call.
+    pub fn streams_by_employee(env: Env, employee: Address) -> Vec<u64> {
+        get_employee_streams(&env, &employee)
     }
 }
