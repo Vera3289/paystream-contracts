@@ -36,12 +36,29 @@ pub struct Stream {
     pub locked: bool,
 }
 
+/// Parameters for a single stream in a batch create call.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct StreamParams {
+    pub employee: Address,
+    pub token: Address,
+    pub deposit: i128,
+    pub rate_per_second: i128,
+    pub stop_time: u64,
+}
+
 /// Storage keys.
 #[contracttype]
 pub enum DataKey {
     Stream(u64),
     StreamCount,
     Admin,
+    /// Minimum deposit enforced on create_stream.
+    MinDeposit,
+    /// Monotonically-increasing nonce for admin operations (replay protection).
+    AdminNonce,
+    /// Contract-wide pause flag.
+    Paused,
     /// Index: employer address → Vec<u64> of stream IDs they own.
     EmployerStreams(Address),
     /// Index: employee address → Vec<u64> of stream IDs paying them.
@@ -63,3 +80,6 @@ pub const ERR_REENTRANT: &str = "E003: reentrant withdraw detected";
 pub const ERR_OVERFLOW: &str = "E004: arithmetic overflow in claimable calculation";
 pub const ERR_STREAM_CANCELLED: &str = "E005: cannot top up a cancelled stream";
 pub const ERR_STREAM_EXHAUSTED: &str = "E006: cannot top up an exhausted stream";
+pub const ERR_BELOW_MIN_DEPOSIT: &str = "E007: deposit below minimum";
+pub const ERR_INVALID_RATE: &str = "E008: rate_per_second exceeds maximum";
+pub const ERR_BAD_NONCE: &str = "E009: invalid admin nonce";
