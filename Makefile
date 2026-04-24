@@ -1,4 +1,4 @@
-.PHONY: build test fmt fmt-check lint clean deploy-local deploy-testnet
+.PHONY: build test fmt fmt-check lint deny clean deploy-local deploy-testnet
 
 build:
 	stellar contract build
@@ -17,6 +17,9 @@ lint:
 
 check:
 	cargo check --all
+
+deny:
+	cargo deny check
 
 clean:
 	cargo clean
