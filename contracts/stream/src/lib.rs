@@ -9,7 +9,7 @@ mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
 use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
-use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE};
+use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED};
 
 #[contract]
 pub struct StreamContract;
@@ -177,7 +177,9 @@ impl StreamContract {
         employer.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
         assert_eq!(stream.employer, employer, "not the employer");
-        assert_eq!(stream.status, StreamStatus::Active, "stream not active");
+        // Issue #11: reject cancelled and exhausted streams with descriptive errors
+        assert!(stream.status != StreamStatus::Cancelled, "{}", ERR_STREAM_CANCELLED);
+        assert!(stream.status != StreamStatus::Exhausted, "{}", ERR_STREAM_EXHAUSTED);
         assert!(amount > 0, "amount must be positive");
 
         let token_client = token::Client::new(&env, &stream.token);
@@ -187,9 +189,6 @@ impl StreamContract {
             .deposit
             .checked_add(amount)
             .expect("deposit overflow");
-        if stream.status == StreamStatus::Exhausted {
-            stream.status = StreamStatus::Active;
-        }
         save_stream(&env, &stream);
         events::topped_up(&env, stream_id, &employer, amount);
     }

@@ -385,3 +385,43 @@ fn test_create_stream_positive_rate_ok() {
     assert_eq!(id, 1);
     assert_eq!(client.get_stream(&id).rate_per_second, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #11 – top_up rejects cancelled and exhausted streams
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "E005")]
+fn test_top_up_cancelled_stream_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    client.cancel_stream(&employer, &id);
+    client.top_up(&employer, &id, &1000);
+}
+
+#[test]
+#[should_panic(expected = "E006")]
+fn test_top_up_exhausted_stream_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &100);
+    let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0);
+
+    // Exhaust the stream
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employee, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Exhausted);
+
+    client.top_up(&employer, &id, &1000);
+}
