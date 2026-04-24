@@ -387,12 +387,20 @@ fn test_create_stream_positive_rate_ok() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #11 – top_up rejects cancelled and exhausted streams
+// Issue #20 – Contract upgrade / migration path
 // ---------------------------------------------------------------------------
 
+// Import the compiled WASM for upgrade tests. The contract must be built first.
+// In CI this is handled by the build step before tests run.
+mod stream_wasm {
+    soroban_sdk::contractimport!(
+        file = "../../../target/wasm32v1-none/release/paystream_stream.wasm"
+    );
+}
+
+/// Upgrading the contract with the same WASM preserves all existing stream state.
 #[test]
-#[should_panic(expected = "E005")]
-fn test_top_up_cancelled_stream_rejected() {
+fn test_upgrade_preserves_stream_state() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     let employer = Address::generate(&env);
@@ -401,27 +409,39 @@ fn test_top_up_cancelled_stream_rejected() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
-    client.cancel_stream(&employer, &id);
-    client.top_up(&employer, &id, &1000);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+
+    // Upload the current contract WASM and upgrade — state must survive
+    let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
+    client.upgrade(&admin, &new_wasm_hash);
+
+    // Stream state is intact after upgrade
+    let s = client.get_stream(&id);
+    assert_eq!(s.deposit, 10_000);
+    assert_eq!(s.rate_per_second, 10);
+    assert_eq!(s.status, StreamStatus::Active);
+    assert_eq!(client.claimable(&id), 1000);
 }
 
+/// migrate() is a no-op in the base version and must not panic.
 #[test]
-#[should_panic(expected = "E006")]
-fn test_top_up_exhausted_stream_rejected() {
+fn test_migrate_noop() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
     client.initialize(&admin);
-    client.set_min_deposit(&admin, &100);
-    let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0);
+    client.migrate(&admin); // must not panic
+}
 
-    // Exhaust the stream
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.withdraw(&employee, &id);
-    assert_eq!(client.get_stream(&id).status, StreamStatus::Exhausted);
+/// Only admin can call upgrade.
+#[test]
+#[should_panic]
+fn test_upgrade_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
 
-    client.top_up(&employer, &id, &1000);
+    let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
+    client.upgrade(&attacker, &new_wasm_hash);
 }

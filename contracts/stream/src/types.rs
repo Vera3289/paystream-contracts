@@ -44,6 +44,8 @@ pub enum DataKey {
     Admin,
     /// Index: employer address → Vec<u64> of stream IDs they own.
     EmployerStreams(Address),
+    /// Index: employee address → Vec<u64> of stream IDs paying them.
+    EmployeeStreams(Address),
 }
 
 /// Contract error codes – panic messages reference these names so callers can

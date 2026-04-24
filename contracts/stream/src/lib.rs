@@ -7,7 +7,7 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
 use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
 use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED};
 
@@ -72,6 +72,7 @@ impl StreamContract {
         };
         save_stream(&env, &stream);
         index_employer_stream(&env, &employer, id);
+        index_employee_stream(&env, &employee, id);
         events::stream_created(&env, id, &employer, &employee, rate_per_second);
         id
     }
@@ -273,6 +274,37 @@ impl StreamContract {
         storage_claimable_at(&stream, timestamp)
     }
 
+    /// Admin upgrades the contract WASM in-place.
+    ///
+    /// All existing stream state (streams, indices, admin) is preserved because
+    /// Soroban's upgrade mechanism only replaces the executable code — persistent
+    /// and instance storage entries are untouched.
+    ///
+    /// After uploading the new WASM with `stellar contract upload`, call:
+    /// ```
+    /// stellar contract invoke -- upgrade --new_wasm_hash <HASH>
+    /// ```
+    /// If the new version requires data-model changes, call `migrate` immediately
+    /// after `upgrade` in the same or a follow-up transaction.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).expect("admin not set");
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    /// No-op migration hook called after an upgrade when the new version needs
+    /// to initialise new storage fields or transform existing data.
+    ///
+    /// Override this function in the upgraded WASM with the actual migration
+    /// logic. The base implementation is intentionally empty so that upgrades
+    /// that require no data changes can skip calling it.
+    pub fn migrate(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).expect("admin not set");
+        assert_eq!(admin, stored_admin, "not the admin");
+        // No-op in the base version; override in upgraded WASM as needed.
+    }
+
     /// Total streams created.
     pub fn stream_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::StreamCount).unwrap_or(0)
@@ -282,5 +314,11 @@ impl StreamContract {
     /// not the total stream count — backed by a per-employer index.
     pub fn streams_by_employer(env: Env, employer: Address) -> Vec<u64> {
         get_employer_streams(&env, &employer)
+    }
+
+    /// Return all stream IDs paying `employee`. O(n) in the number of their streams,
+    /// backed by a per-employee index updated on every create_stream call.
+    pub fn streams_by_employee(env: Env, employee: Address) -> Vec<u64> {
+        get_employee_streams(&env, &employee)
     }
 }
