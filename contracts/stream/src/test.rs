@@ -385,3 +385,63 @@ fn test_create_stream_positive_rate_ok() {
     assert_eq!(id, 1);
     assert_eq!(client.get_stream(&id).rate_per_second, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #20 – Contract upgrade / migration path
+// ---------------------------------------------------------------------------
+
+// Import the compiled WASM for upgrade tests. The contract must be built first.
+// In CI this is handled by the build step before tests run.
+mod stream_wasm {
+    soroban_sdk::contractimport!(
+        file = "../../../target/wasm32v1-none/release/paystream_stream.wasm"
+    );
+}
+
+/// Upgrading the contract with the same WASM preserves all existing stream state.
+#[test]
+fn test_upgrade_preserves_stream_state() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+
+    // Upload the current contract WASM and upgrade — state must survive
+    let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
+    client.upgrade(&admin, &new_wasm_hash);
+
+    // Stream state is intact after upgrade
+    let s = client.get_stream(&id);
+    assert_eq!(s.deposit, 10_000);
+    assert_eq!(s.rate_per_second, 10);
+    assert_eq!(s.status, StreamStatus::Active);
+    assert_eq!(client.claimable(&id), 1000);
+}
+
+/// migrate() is a no-op in the base version and must not panic.
+#[test]
+fn test_migrate_noop() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.migrate(&admin); // must not panic
+}
+
+/// Only admin can call upgrade.
+#[test]
+#[should_panic]
+fn test_upgrade_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+
+    let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
+    client.upgrade(&attacker, &new_wasm_hash);
+}
