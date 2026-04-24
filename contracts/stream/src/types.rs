@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use soroban_sdk::{contracttype, Address};
 
 /// Status of a salary stream.

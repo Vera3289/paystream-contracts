@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use paystream_stream::storage::claimable_amount;
 use paystream_stream::types::{Stream, StreamStatus};
 use proptest::prelude::*;

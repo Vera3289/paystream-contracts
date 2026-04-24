@@ -19,7 +19,17 @@ jobs:
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          # Run all checks: licenses, advisories, bans, sources.
-          # Remove individual checks from this list to skip them.
           command: check licenses bans advisories sources
           arguments: --workspace
+
+  hawkeye:
+    name: License headers (hawkeye)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install hawkeye
+        run: cargo install --locked hawkeye
+
+      - name: Check license headers
+        run: hawkeye check

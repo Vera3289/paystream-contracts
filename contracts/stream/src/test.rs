@@ -1,8 +1,6 @@
-#![cfg(test)]
+// SPDX-License-Identifier: Apache-2.0
 
-use super::*;
-use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+#![cfg(test)]
     Address, Env,
 };
 

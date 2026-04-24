@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #![no_std]
-
-mod storage;
-mod types;
-
-#[cfg(test)]
-mod test;
 
 use soroban_sdk::{contract, contractimpl, Address, Env};
 use storage::{
