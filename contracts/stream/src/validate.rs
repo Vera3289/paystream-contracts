@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use soroban_sdk::Address;
 use crate::types::{
     ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_BELOW_MIN_DEPOSIT, ERR_INVALID_RATE,

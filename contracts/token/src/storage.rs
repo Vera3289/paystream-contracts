@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use soroban_sdk::{Env, Address};
 use crate::types::TokenDataKey;
 

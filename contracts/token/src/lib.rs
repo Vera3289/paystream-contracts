@@ -2,12 +2,6 @@
 
 #![no_std]
 
-mod storage;
-mod types;
-
-#[cfg(test)]
-mod test;
-
 use soroban_sdk::{contract, contractimpl, Address, Env};
 use storage::{
     allowance, balance_of, get_admin, set_admin, set_allowance,
