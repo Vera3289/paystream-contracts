@@ -111,6 +111,10 @@ The `cargo-cache` volume persists the Cargo registry between runs so subsequent 
 ## Stream Contract Reference
 
 > Full parameter, return value, error, and example documentation: **[docs/api-reference.md](docs/api-reference.md)**
+>
+> SDK examples (JavaScript, Python, Rust): **[examples/](examples/)**
+>
+> Frontend integration guide (TypeScript): **[docs/integration/frontend.md](docs/integration/frontend.md)**
 
 ### Functions
 
