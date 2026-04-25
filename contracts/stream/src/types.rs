@@ -86,3 +86,4 @@ pub const ERR_STREAM_EXHAUSTED: &str = "E006: cannot top up an exhausted stream"
 pub const ERR_BELOW_MIN_DEPOSIT: &str = "E007: deposit below minimum";
 pub const ERR_INVALID_RATE: &str = "E008: rate_per_second exceeds maximum";
 pub const ERR_BAD_NONCE: &str = "E009: invalid admin nonce";
+pub const ERR_SAME_PARTY: &str = "E010: employer and employee must differ";
