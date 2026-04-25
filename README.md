@@ -110,6 +110,8 @@ The `cargo-cache` volume persists the Cargo registry between runs so subsequent 
 
 ## Stream Contract Reference
 
+> Full parameter, return value, error, and example documentation: **[docs/api-reference.md](docs/api-reference.md)**
+
 ### Functions
 
 | Function | Caller | Description |
