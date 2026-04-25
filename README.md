@@ -7,6 +7,8 @@ Soroban smart contracts for **PayStream** — decentralized payroll and salary s
 
 PayStream lets employers stream salaries to employees in real-time, per-second. Instead of waiting for a monthly paycheck, employees earn and can withdraw their salary continuously as they work — fully on-chain, trustless, and transparent.
 
+> 🎬 **[Watch the demo](https://youtu.be/paystream-demo)** — see the full `create_stream → withdraw` flow in action.
+
 ---
 
 ## Why PayStream?
