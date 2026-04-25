@@ -8,6 +8,9 @@ use storage::{
     set_balance, set_total_supply, total_supply,
 };
 
+pub const MAX_SUPPLY: i128 = 1_000_000_000_000_000_000;
+const ERR_SUPPLY_CAP_EXCEEDED: &str = "supply cap exceeded";
+
 #[contract]
 pub struct TokenContract;
 
@@ -24,8 +27,11 @@ impl TokenContract {
     ///
     /// # Errors
     /// - Panics if `admin` auth fails
+    /// - Panics if `initial_supply` exceeds `MAX_SUPPLY`
     pub fn initialize(env: Env, admin: Address, initial_supply: i128) {
         admin.require_auth();
+        assert!(initial_supply >= 0, "amount must be positive");
+        assert!(initial_supply <= MAX_SUPPLY, "{}", ERR_SUPPLY_CAP_EXCEEDED);
         set_admin(&env, &admin);
         set_balance(&env, &admin, initial_supply);
         set_total_supply(&env, initial_supply);
@@ -112,12 +118,18 @@ impl TokenContract {
     /// # Errors
     /// - Panics if `admin` auth fails or does not match stored admin
     /// - Panics if `amount` ≤ 0
+    /// - Panics if minting would exceed `MAX_SUPPLY`
     pub fn mint(env: Env, admin: Address, to: Address, amount: i128) {
         admin.require_auth();
         assert_eq!(get_admin(&env), admin, "not admin");
         assert!(amount > 0, "amount must be positive");
+        let current_supply = total_supply(&env);
+        let new_supply = current_supply
+            .checked_add(amount)
+            .expect("supply overflow");
+        assert!(new_supply <= MAX_SUPPLY, "{}", ERR_SUPPLY_CAP_EXCEEDED);
         set_balance(&env, &to, balance_of(&env, &to) + amount);
-        set_total_supply(&env, total_supply(&env) + amount);
+        set_total_supply(&env, new_supply);
     }
 
     /// Burn `amount` tokens from `from`'s own balance, reducing total supply.
@@ -161,5 +173,131 @@ impl TokenContract {
         set_allowance(&env, &from, &spender, allowed - amount);
         set_balance(&env, &from, bal - amount);
         set_total_supply(&env, total_supply(&env) - amount);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::{Address, Env};
+
+    fn setup() -> (Env, TokenContractClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(TokenContract, ());
+        let client = TokenContractClient::new(&env, &id);
+        (env, client)
+    }
+
+    #[test]
+    fn test_initialize() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &1_000_000);
+        assert_eq!(client.total_supply(), 1_000_000);
+        assert_eq!(client.balance(&admin), 1_000_000);
+    }
+
+    #[test]
+    fn test_transfer() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &1_000);
+        client.transfer(&admin, &user, &400);
+        assert_eq!(client.balance(&admin), 600);
+        assert_eq!(client.balance(&user), 400);
+    }
+
+    #[test]
+    fn test_mint_and_burn() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &1_000);
+        client.mint(&admin, &user, &500);
+        assert_eq!(client.total_supply(), 1_500);
+        // holder burns their own tokens
+        client.burn(&user, &200);
+        assert_eq!(client.total_supply(), 1_300);
+        assert_eq!(client.balance(&user), 300);
+    }
+
+    #[test]
+    fn test_burn_from_with_allowance() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let spender = Address::generate(&env);
+        client.initialize(&admin, &1_000);
+        client.transfer(&admin, &user, &500);
+        client.approve(&user, &spender, &300);
+        client.burn_from(&spender, &user, &200);
+        assert_eq!(client.balance(&user), 300);
+        assert_eq!(client.total_supply(), 800);
+    }
+
+    #[test]
+    #[should_panic(expected = "allowance exceeded")]
+    fn test_burn_from_exceeds_allowance() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let spender = Address::generate(&env);
+        client.initialize(&admin, &1_000);
+        client.transfer(&admin, &user, &500);
+        client.approve(&user, &spender, &100);
+        client.burn_from(&spender, &user, &200);
+    }
+
+    #[test]
+    #[should_panic(expected = "insufficient balance")]
+    fn test_burn_insufficient_balance() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &100);
+        client.transfer(&admin, &user, &50);
+        client.burn(&user, &200);
+    }
+
+    #[test]
+    #[should_panic(expected = "insufficient balance")]
+    fn test_transfer_overdraft() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &100);
+        client.transfer(&admin, &user, &999);
+    }
+
+    #[test]
+    fn test_mint_to_cap_succeeds() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &0);
+        client.mint(&admin, &user, &MAX_SUPPLY);
+        assert_eq!(client.total_supply(), MAX_SUPPLY);
+        assert_eq!(client.balance(&user), MAX_SUPPLY);
+    }
+
+    #[test]
+    #[should_panic(expected = "supply cap exceeded")]
+    fn test_mint_beyond_cap_fails() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &0);
+        client.mint(&admin, &user, &MAX_SUPPLY);
+        client.mint(&admin, &user, &1);
+    }
+
+    #[test]
+    #[should_panic(expected = "supply cap exceeded")]
+    fn test_initialize_beyond_cap_fails() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &MAX_SUPPLY + 1);
     }
 }
