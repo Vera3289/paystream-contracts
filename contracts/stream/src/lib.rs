@@ -155,6 +155,7 @@ impl StreamContract {
     /// - `deposit` — total tokens to lock in escrow (must be ≥ min deposit)
     /// - `rate_per_second` — tokens streamed per second (1 – 1,000,000,000)
     /// - `stop_time` — hard stop timestamp in seconds; 0 means indefinite
+    /// - `cooldown_period` — optional minimum seconds between withdrawals; 0 disables cooldown
     ///
     /// # Returns
     /// The new stream ID as `u64`.
@@ -176,6 +177,7 @@ impl StreamContract {
         deposit: i128,
         rate_per_second: i128,
         stop_time: u64,
+        cooldown_period: u64,
     ) -> u64 {
         employer.require_auth();
         assert!(!get_paused(&env), "contract is paused");
@@ -200,6 +202,7 @@ impl StreamContract {
             start_time: now,
             stop_time,
             last_withdraw_time: now,
+            cooldown_period,
             status: StreamStatus::Active,
             locked: false,
         };
@@ -259,6 +262,7 @@ impl StreamContract {
                 start_time: now,
                 stop_time: p.stop_time,
                 last_withdraw_time: now,
+                cooldown_period: 0,
                 status: StreamStatus::Active,
                 locked: false,
             };
@@ -302,6 +306,10 @@ impl StreamContract {
         );
 
         let now = env.ledger().timestamp();
+        if stream.status == StreamStatus::Active && stream.cooldown_period > 0 {
+            let cooldown_expiration = stream.last_withdraw_time.saturating_add(stream.cooldown_period);
+            assert!(now >= cooldown_expiration, "{}", ERR_WITHDRAW_COOLDOWN);
+        }
         let amount = claimable_amount(&stream, now);
         if amount == 0 {
             return 0;
