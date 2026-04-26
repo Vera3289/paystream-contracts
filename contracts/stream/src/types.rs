@@ -26,6 +26,7 @@ pub struct Stream {
     pub start_time: u64,       // ledger timestamp when stream started
     pub stop_time: u64,        // 0 = no end, else hard stop timestamp
     pub last_withdraw_time: u64,
+    pub cooldown_period: u64,  // minimum seconds between withdrawals
     pub status: StreamStatus,
     /// Reentrancy guard: true while a withdraw cross-contract call is in flight.
     /// Soroban executes contracts atomically within a single transaction, so
@@ -77,10 +78,12 @@ pub enum DataKey {
 /// | E002 | ERR_ZERO_DEPOSIT    | `deposit` must be > 0                        |
 /// | E003 | ERR_REENTRANT       | Reentrant withdraw detected                  |
 /// | E004 | ERR_OVERFLOW        | Arithmetic overflow in claimable calculation |
+/// | E010 | ERR_WITHDRAW_COOLDOWN | Withdraw cooldown not expired               |
 pub const ERR_ZERO_RATE: &str = "E001: rate_per_second must be greater than zero";
 pub const ERR_ZERO_DEPOSIT: &str = "E002: deposit must be positive";
 pub const ERR_REENTRANT: &str = "E003: reentrant withdraw detected";
 pub const ERR_OVERFLOW: &str = "E004: arithmetic overflow in claimable calculation";
+pub const ERR_WITHDRAW_COOLDOWN: &str = "E010: withdraw cooldown not expired";
 pub const ERR_STREAM_CANCELLED: &str = "E005: cannot top up a cancelled stream";
 pub const ERR_STREAM_EXHAUSTED: &str = "E006: cannot top up an exhausted stream";
 pub const ERR_BELOW_MIN_DEPOSIT: &str = "E007: deposit below minimum";
