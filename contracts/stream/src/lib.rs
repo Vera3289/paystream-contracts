@@ -12,13 +12,15 @@ mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use storage::{
-    claimable_amount, consume_admin_nonce, get_admin, get_admin_nonce, get_employee_streams,
-    get_employer_streams, get_min_deposit, index_employee_stream, index_employer_stream,
-    load_stream, next_id, save_stream, set_admin, set_min_deposit,
+    claimable_amount, clear_pending_admin, consume_admin_nonce, get_admin, get_admin_nonce,
+    get_employee_streams, get_employer_streams, get_fee_bps, get_fee_recipient, get_min_deposit,
+    get_pending_admin, index_employee_stream, index_employer_stream, load_stream, next_id,
+    save_stream, set_admin, set_fee_bps, set_fee_recipient, set_min_deposit, set_pending_admin,
 };
 use types::{
-    DataKey, Stream, StreamParams, StreamStatus, ERR_REENTRANT, ERR_STREAM_CANCELLED,
-    ERR_STREAM_EXHAUSTED, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE,
+    DataKey, Stream, StreamParams, StreamStatus, ERR_FEE_TOO_HIGH, ERR_OVERFLOW, ERR_REENTRANT,
+    ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED, ERR_WITHDRAW_COOLDOWN, ERR_ZERO_DEPOSIT,
+    ERR_ZERO_RATE,
 };
 use validate::{validate_create_stream, validate_top_up};
 
@@ -141,6 +143,31 @@ impl StreamContract {
         consume_admin_nonce(&env, nonce);
         assert!(amount > 0, "{}", ERR_ZERO_DEPOSIT);
         set_min_deposit(&env, amount);
+    }
+
+    /// Admin configures the protocol fee collected on each withdrawal.
+    ///
+    /// The fee is expressed in basis points (1 bps = 0.01%). Maximum is 100 bps (1%).
+    /// Set `fee_bps` to 0 to disable the fee entirely.
+    ///
+    /// # Parameters
+    /// - `admin` — must match the stored admin (requires auth)
+    /// - `nonce` — current admin nonce (replay protection)
+    /// - `fee_bps` — fee in basis points (0–100)
+    /// - `fee_recipient` — address that receives collected fees (required when fee_bps > 0)
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - E009 if `nonce` is wrong
+    /// - E011 if `fee_bps` > 100
+    pub fn set_protocol_fee(env: Env, admin: Address, nonce: u64, fee_bps: u32, fee_recipient: Address) {
+        admin.require_auth();
+        let stored_admin = get_admin(&env);
+        assert_eq!(admin, stored_admin, "not the admin");
+        consume_admin_nonce(&env, nonce);
+        assert!(fee_bps <= 100, "{}", ERR_FEE_TOO_HIGH);
+        set_fee_bps(&env, fee_bps);
+        set_fee_recipient(&env, &fee_recipient);
     }
 
     /// Employer creates a salary stream and deposits funds into the contract escrow.
@@ -329,12 +356,33 @@ impl StreamContract {
         }
 
         let token_client = token::Client::new(&env, &stream.token);
-        token_client.transfer(&env.current_contract_address(), &employee, &amount);
+
+        // Deduct protocol fee if configured.
+        let fee_bps = get_fee_bps(&env);
+        let employee_amount = if fee_bps > 0 {
+            if let Some(recipient) = get_fee_recipient(&env) {
+                // fee = amount * fee_bps / 10_000, rounded down
+                let fee = amount
+                    .checked_mul(fee_bps as i128)
+                    .expect(ERR_OVERFLOW)
+                    / 10_000;
+                if fee > 0 {
+                    token_client.transfer(&env.current_contract_address(), &recipient, &fee);
+                }
+                amount - fee
+            } else {
+                amount
+            }
+        } else {
+            amount
+        };
+
+        token_client.transfer(&env.current_contract_address(), &employee, &employee_amount);
 
         stream.locked = false;
         save_stream(&env, &stream);
-        events::withdrawn(&env, stream_id, &employee, amount);
-        amount
+        events::withdrawn(&env, stream_id, &employee, employee_amount);
+        employee_amount
     }
 
     /// Employer tops up an active stream with additional funds.
