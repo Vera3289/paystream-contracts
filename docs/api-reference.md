@@ -2,7 +2,9 @@
 
 Full documentation for every PayStream contract function: parameters, return values, errors, and CLI examples.
 
-> New to PayStream or Stellar? See the **[Glossary](glossary.md)** for definitions of key terms used throughout this document.
+> See [docs/performance.md](performance.md) for measured Soroban cost and resource usage for contract operations.
+>
+> For event schema and example payloads, see [docs/events.md](events.md).
 
 ---
 

@@ -1,0 +1,26 @@
+{
+  "name": "@paystream/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for PayStream Soroban contracts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^13.1.0"
+  },
+  "devDependencies": {
+    "@freighter-api/freighter-api": "^2.3.0",
+    "typescript": "^5.4.5"
+  },
+  "peerDependencies": {
+    "@freighter-api/freighter-api": "^2.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@freighter-api/freighter-api": {
+      "optional": true
+    }
+  }
+}

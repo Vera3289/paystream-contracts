@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![cfg(test)]
+
+use soroban_sdk::{
     Address, Env,
 };
+
+use crate::{StreamContract, StreamContractClient};
+use crate::types::StreamStatus;
 
 fn setup() -> (Env, StreamContractClient<'static>) {
     let env = Env::default();
@@ -170,6 +175,29 @@ fn test_cancel_stream_refunds_employer() {
     let s = client.get_stream(&id);
     assert_eq!(s.status, StreamStatus::Cancelled);
     assert_eq!(s.withdrawn, 1000);
+}
+
+#[test]
+fn test_cancel_stream_refunds_employer_and_employee_balances() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    client.initialize(&admin);
+    let employer_balance_before = token.balance(&employer);
+    let employee_balance_before = token.balance(&employee);
+
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.cancel_stream(&employer, &id);
+
+    assert_eq!(token.balance(&employee), employee_balance_before + 1000);
+    assert_eq!(token.balance(&employer), employer_balance_before + 9_000);
+    let s = client.get_stream(&id);
+    assert_eq!(s.status, StreamStatus::Cancelled);
 }
 
 #[test]
@@ -492,7 +520,7 @@ fn test_create_stream_rate_too_high_rejected() {
 
 /// employer == employee must be rejected.
 #[test]
-#[should_panic(expected = "employer and employee must differ")]
+#[should_panic(expected = "E010")]
 fn test_create_stream_same_employer_employee_rejected() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
@@ -610,4 +638,115 @@ fn test_accept_admin_wrong_address_rejected() {
     client.initialize(&admin);
     client.propose_admin(&new_admin);
     client.accept_admin(&attacker); // wrong address
+}
+
+// ---------------------------------------------------------------------------
+// Issue #125 – Protocol fee mechanism
+// ---------------------------------------------------------------------------
+
+/// Fee of 0 (default) — employee receives full withdrawal amount.
+#[test]
+fn test_withdraw_no_fee_by_default() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let received = client.withdraw(&employee, &id);
+    // No fee configured → employee gets full 1000
+    assert_eq!(received, 1000);
+}
+
+/// Admin sets 1% fee (100 bps); employee receives 99% of claimable.
+#[test]
+fn test_withdraw_with_fee_deducted() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // nonce 0: set_protocol_fee
+    client.set_protocol_fee(&admin, &0, &100, &fee_recipient);
+
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    // claimable = 1000; fee = 1000 * 100 / 10_000 = 10; employee gets 990
+    let received = client.withdraw(&employee, &id);
+    assert_eq!(received, 990);
+}
+
+/// Fee can be set to 0 to disable it.
+#[test]
+fn test_fee_disabled_when_zero() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // Set fee to 1% then disable it
+    client.set_protocol_fee(&admin, &0, &100, &fee_recipient);
+    client.set_protocol_fee(&admin, &1, &0, &fee_recipient);
+
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let received = client.withdraw(&employee, &id);
+    // Fee is 0 → employee gets full 1000
+    assert_eq!(received, 1000);
+}
+
+/// fee_bps > 100 must be rejected with E011.
+#[test]
+#[should_panic(expected = "E011")]
+fn test_set_protocol_fee_above_max_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_protocol_fee(&admin, &0, &101, &fee_recipient);
+}
+
+/// Non-admin cannot set the protocol fee.
+#[test]
+#[should_panic]
+fn test_set_protocol_fee_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_protocol_fee(&attacker, &0, &50, &fee_recipient);
+}
+
+/// 0.5% fee (50 bps) rounds down correctly.
+#[test]
+fn test_fee_rounding() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_protocol_fee(&admin, &0, &50, &fee_recipient);
+
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    // claimable = 1000; fee = 1000 * 50 / 10_000 = 5; employee gets 995
+    let received = client.withdraw(&employee, &id);
+    assert_eq!(received, 995);
 }
