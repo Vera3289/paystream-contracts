@@ -515,7 +515,7 @@ fn test_create_stream_rate_too_high_rejected() {
 
 /// employer == employee must be rejected.
 #[test]
-#[should_panic(expected = "employer and employee must differ")]
+#[should_panic(expected = "E010")]
 fn test_create_stream_same_employer_employee_rejected() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
