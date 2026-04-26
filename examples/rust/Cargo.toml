@@ -1,0 +1,13 @@
+[package]
+name = "paystream-example"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "stream"
+path = "stream.rs"
+
+[dependencies]
+stellar-sdk = { version = "0.1", features = ["soroban"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1"

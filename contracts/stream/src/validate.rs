@@ -2,7 +2,7 @@
 
 use soroban_sdk::Address;
 use crate::types::{
-    ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_BELOW_MIN_DEPOSIT, ERR_INVALID_RATE,
+    ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_BELOW_MIN_DEPOSIT, ERR_INVALID_RATE, ERR_SAME_PARTY,
 };
 
 /// Maximum allowed rate_per_second (1 billion tokens/s — prevents overflow in
@@ -34,7 +34,7 @@ pub fn validate_create_stream(
     if stop_time > 0 {
         assert!(stop_time > now, "stop_time must be in the future");
     }
-    assert!(employer != employee, "employer and employee must differ");
+    assert!(employer != employee, "{}", ERR_SAME_PARTY);
 }
 
 /// Validate a top-up amount.
