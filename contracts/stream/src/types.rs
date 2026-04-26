@@ -66,7 +66,12 @@ pub enum DataKey {
     EmployerStreams(Address),
     /// Index: employee address → Vec<u64> of stream IDs paying them.
     EmployeeStreams(Address),
-    MinDeposit,
+    /// Pending admin address for two-step admin transfer.
+    PendingAdmin,
+    /// Protocol fee in basis points (0–100, i.e. 0–1%).
+    FeeBps,
+    /// Address that receives collected protocol fees.
+    FeeRecipient,
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -89,3 +94,4 @@ pub const ERR_STREAM_EXHAUSTED: &str = "E006: cannot top up an exhausted stream"
 pub const ERR_BELOW_MIN_DEPOSIT: &str = "E007: deposit below minimum";
 pub const ERR_INVALID_RATE: &str = "E008: rate_per_second exceeds maximum";
 pub const ERR_BAD_NONCE: &str = "E009: invalid admin nonce";
+pub const ERR_FEE_TOO_HIGH: &str = "E011: fee_bps exceeds maximum of 100 (1%)";
