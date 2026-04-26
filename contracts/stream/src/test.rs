@@ -173,6 +173,29 @@ fn test_cancel_stream_refunds_employer() {
 }
 
 #[test]
+fn test_cancel_stream_refunds_employer_and_employee_balances() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    client.initialize(&admin);
+    let employer_balance_before = token.balance(&employer);
+    let employee_balance_before = token.balance(&employee);
+
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.cancel_stream(&employer, &id);
+
+    assert_eq!(token.balance(&employee), employee_balance_before + 1000);
+    assert_eq!(token.balance(&employer), employer_balance_before + 9_000);
+    let s = client.get_stream(&id);
+    assert_eq!(s.status, StreamStatus::Cancelled);
+}
+
+#[test]
 fn test_stop_time_caps_claimable() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
