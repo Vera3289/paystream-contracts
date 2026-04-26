@@ -2,6 +2,10 @@
 
 Full documentation for every PayStream contract function: parameters, return values, errors, and CLI examples.
 
+> See [docs/performance.md](performance.md) for measured Soroban cost and resource usage for contract operations.
+>
+> For event schema and example payloads, see [docs/events.md](events.md).
+
 ---
 
 ## Stream Contract
