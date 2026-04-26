@@ -2,6 +2,8 @@
 
 Full documentation for every PayStream contract function: parameters, return values, errors, and CLI examples.
 
+> New to PayStream or Stellar? See the **[Glossary](glossary.md)** for definitions of key terms used throughout this document.
+
 ---
 
 ## Stream Contract
