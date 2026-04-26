@@ -66,6 +66,7 @@ pub enum DataKey {
     EmployerStreams(Address),
     /// Index: employee address → Vec<u64> of stream IDs paying them.
     EmployeeStreams(Address),
+    PendingAdmin,
     MinDeposit,
 }
 
