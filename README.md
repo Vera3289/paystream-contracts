@@ -114,6 +114,8 @@ The `cargo-cache` volume persists the Cargo registry between runs so subsequent 
 
 > Full parameter, return value, error, and example documentation: **[docs/api-reference.md](docs/api-reference.md)**
 >
+> Developer quickstart tutorial (zero to running stream in 30 min): **[docs/quickstart.md](docs/quickstart.md)**
+>
 > SDK examples (JavaScript, Python, Rust): **[examples/](examples/)**
 >
 > Frontend integration guide (TypeScript): **[docs/integration/frontend.md](docs/integration/frontend.md)**

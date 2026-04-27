@@ -171,3 +171,19 @@ pub fn get_fee_recipient(env: &Env) -> Option<Address> {
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
     env.storage().instance().set(&DataKey::FeeRecipient, recipient);
 }
+
+// ---------------------------------------------------------------------------
+// Employer transfer helpers (issue #69)
+// ---------------------------------------------------------------------------
+
+pub fn set_pending_employer(env: &Env, stream_id: u64, pending: &Address) {
+    env.storage().instance().set(&DataKey::PendingEmployer(stream_id), pending);
+}
+
+pub fn get_pending_employer(env: &Env, stream_id: u64) -> Option<Address> {
+    env.storage().instance().get(&DataKey::PendingEmployer(stream_id))
+}
+
+pub fn clear_pending_employer(env: &Env, stream_id: u64) {
+    env.storage().instance().remove(&DataKey::PendingEmployer(stream_id));
+}
