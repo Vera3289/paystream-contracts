@@ -1,6 +1,7 @@
 # PayStream Contracts
 
 [![CI](https://github.com/Vera3289/paystream-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Vera3289/paystream-contracts/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/Vera3289/paystream-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Vera3289/paystream-contracts)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Soroban smart contracts for **PayStream** — decentralized payroll and salary streaming on the Stellar blockchain.
