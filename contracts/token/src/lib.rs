@@ -2,6 +2,9 @@
 
 #![no_std]
 
+mod storage;
+mod types;
+
 use soroban_sdk::{contract, contractimpl, Address, Env};
 use storage::{
     allowance, balance_of, get_admin, set_admin, set_allowance,
