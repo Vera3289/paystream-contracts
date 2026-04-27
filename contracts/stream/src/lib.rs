@@ -12,15 +12,16 @@ mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use storage::{
-    claimable_amount, clear_pending_admin, consume_admin_nonce, get_admin, get_admin_nonce,
-    get_employee_streams, get_employer_streams, get_fee_bps, get_fee_recipient, get_min_deposit,
-    get_pending_admin, index_employee_stream, index_employer_stream, load_stream, next_id,
-    save_stream, set_admin, set_fee_bps, set_fee_recipient, set_min_deposit, set_pending_admin,
+    claimable_amount, clear_pending_admin, clear_pending_employer, consume_admin_nonce, get_admin,
+    get_admin_nonce, get_employee_streams, get_employer_streams, get_fee_bps, get_fee_recipient,
+    get_min_deposit, get_pending_admin, get_pending_employer, index_employee_stream,
+    index_employer_stream, load_stream, next_id, save_stream, set_admin, set_fee_bps,
+    set_fee_recipient, set_min_deposit, set_pending_admin, set_pending_employer,
 };
 use types::{
-    DataKey, Stream, StreamParams, StreamStatus, ERR_FEE_TOO_HIGH, ERR_OVERFLOW, ERR_REENTRANT,
-    ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED, ERR_WITHDRAW_COOLDOWN, ERR_ZERO_DEPOSIT,
-    ERR_ZERO_RATE,
+    DataKey, Stream, StreamParams, StreamStatus, ERR_FEE_TOO_HIGH, ERR_INVALID_TOKEN, ERR_OVERFLOW,
+    ERR_REENTRANT, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED, ERR_UNAUTHORIZED_TRANSFER,
+    ERR_WITHDRAW_COOLDOWN, ERR_ZERO_DEPOSIT,
 };
 use validate::{validate_create_stream, validate_top_up};
 
@@ -214,7 +215,7 @@ impl StreamContract {
         validate_create_stream(deposit, min_deposit, rate_per_second, stop_time, now, &employer, &employee);
 
         let token_client = token::Client::new(&env, &token_address);
-        token_client.balance(&employer); // SEP-41 probe
+        let _ = token_client.try_balance(&employer).expect(ERR_INVALID_TOKEN);
         token_client.transfer(&employer, &env.current_contract_address(), &deposit);
 
         let id = next_id(&env);
@@ -274,7 +275,7 @@ impl StreamContract {
             validate_create_stream(p.deposit, min_deposit, p.rate_per_second, p.stop_time, now, &employer, &p.employee);
 
             let token_client = token::Client::new(&env, &p.token);
-            token_client.balance(&employer); // SEP-41 probe
+            let _ = token_client.try_balance(&employer).expect(ERR_INVALID_TOKEN);
             token_client.transfer(&employer, &env.current_contract_address(), &p.deposit);
 
             let id = next_id(&env);
@@ -512,6 +513,52 @@ impl StreamContract {
         stream.status = StreamStatus::Cancelled;
         save_stream(&env, &stream);
         events::stream_status_changed(&env, stream_id, &StreamStatus::Cancelled);
+    }
+
+    /// Step 1 of two-step stream ownership transfer: current employer nominates a new employer.
+    ///
+    /// The nominated address must call [`accept_employer_transfer`] to complete the transfer.
+    /// Until accepted, the current employer retains full control of the stream.
+    ///
+    /// # Parameters
+    /// - `employer` — must match the stream's current employer (requires auth)
+    /// - `stream_id` — ID of the stream to transfer
+    /// - `new_employer` — address being nominated as the next employer
+    ///
+    /// # Errors
+    /// - Panics if stream not found
+    /// - Panics if `employer` is not the stream's current employer
+    pub fn propose_employer_transfer(env: Env, employer: Address, stream_id: u64, new_employer: Address) {
+        employer.require_auth();
+        let stream = load_stream(&env, stream_id).expect("stream not found");
+        assert_eq!(stream.employer, employer, "not the employer");
+        set_pending_employer(&env, stream_id, &new_employer);
+        events::employer_transfer_proposed(&env, stream_id, &employer, &new_employer);
+    }
+
+    /// Step 2 of two-step stream ownership transfer: nominated employer accepts and takes ownership.
+    ///
+    /// After acceptance the new employer gains full control (pause, resume, cancel, top-up).
+    /// The old employer loses all control.
+    ///
+    /// # Parameters
+    /// - `new_employer` — must match the address set by [`propose_employer_transfer`] (requires auth)
+    /// - `stream_id` — ID of the stream being transferred
+    ///
+    /// # Errors
+    /// - Panics if stream not found
+    /// - Panics if there is no pending employer for this stream
+    /// - E013 if `new_employer` does not match the pending employer
+    pub fn accept_employer_transfer(env: Env, new_employer: Address, stream_id: u64) {
+        new_employer.require_auth();
+        let pending = get_pending_employer(&env, stream_id).expect("no pending employer transfer");
+        assert_eq!(pending, new_employer, "{}", ERR_UNAUTHORIZED_TRANSFER);
+        let mut stream = load_stream(&env, stream_id).expect("stream not found");
+        let old_employer = stream.employer.clone();
+        stream.employer = new_employer.clone();
+        save_stream(&env, &stream);
+        clear_pending_employer(&env, stream_id);
+        events::employer_transfer_accepted(&env, stream_id, &old_employer, &new_employer);
     }
 
     /// Read the full state of a stream by ID.

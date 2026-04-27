@@ -37,3 +37,17 @@ pub fn contract_paused(env: &Env, paused: bool) {
         paused,
     );
 }
+
+pub fn employer_transfer_proposed(env: &Env, id: u64, old_employer: &Address, new_employer: &Address) {
+    env.events().publish(
+        (symbol_short!("emp_prop"), id),
+        (old_employer.clone(), new_employer.clone()),
+    );
+}
+
+pub fn employer_transfer_accepted(env: &Env, id: u64, old_employer: &Address, new_employer: &Address) {
+    env.events().publish(
+        (symbol_short!("emp_acc"), id),
+        (old_employer.clone(), new_employer.clone()),
+    );
+}
