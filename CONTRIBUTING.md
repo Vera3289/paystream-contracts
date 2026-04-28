@@ -6,6 +6,7 @@ Thank you for contributing to PayStream — a Soroban smart contract system for 
 
 ## Table of Contents
 
+- [Onboarding Guide](#onboarding-guide)
 - [Development Setup](#development-setup)
   - [macOS](#macos)
   - [Linux](#linux)
@@ -22,6 +23,10 @@ Thank you for contributing to PayStream — a Soroban smart contract system for 
 - [License](#license)
 
 ---
+
+## Onboarding Guide
+
+If this is your first contribution, start with `docs/onboarding.md` for a quick path from fork setup to opening your first pull request.
 
 ## Development Setup
 
