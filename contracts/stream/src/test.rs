@@ -1642,3 +1642,85 @@ fn test_create_and_withdraw_with_usdc_token() {
     assert_eq!(s.withdrawn, 60_000_000);
     assert_eq!(s.status, StreamStatus::Active);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #55 – top_up increasing stream duration tests
+// ---------------------------------------------------------------------------
+
+/// Doubling the deposit via top_up makes the stream last twice as long.
+#[test]
+fn test_top_up_doubles_deposit_stream_lasts_twice_as_long() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+    // deposit = 1000, rate = 10 → exhausts in 100s
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &10, &0, &0, &0);
+
+    // Top up with another 1000 → total deposit = 2000, exhausts in 200s
+    client.top_up(&employer, &id, &1000);
+    let s = client.get_stream(&id);
+    assert_eq!(s.deposit, 2000);
+
+    // At 200s the full 2000 should be claimable
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    assert_eq!(client.claimable(&id), 2000);
+}
+
+/// Claimable calculation is correct after a top_up mid-stream.
+#[test]
+fn test_claimable_correct_after_top_up() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // deposit = 500, rate = 5 → exhausts in 100s
+    let id = client.create_stream(&employer, &employee, &token_id, &500, &5, &0, &0, &0);
+
+    // 40s elapsed → 200 earned
+    env.ledger().with_mut(|l| l.timestamp += 40);
+    assert_eq!(client.claimable(&id), 200);
+
+    // Top up 500 more → total deposit = 1000
+    client.top_up(&employer, &id, &500);
+
+    // 60s more elapsed → 200 + 300 = 500 claimable (but deposit is 1000 so not capped)
+    env.ledger().with_mut(|l| l.timestamp += 60);
+    assert_eq!(client.claimable(&id), 500);
+}
+
+/// top_up while stream is paused: deposit increases, duration extends correctly on resume.
+#[test]
+fn test_top_up_during_paused_state() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+    // deposit = 1000, rate = 10 → exhausts in 100s
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &10, &0, &0, &0);
+
+    // Advance 30s, pause
+    env.ledger().with_mut(|l| l.timestamp += 30);
+    client.pause_stream(&employer, &id);
+
+    // Top up 500 while paused → total deposit = 1500
+    client.top_up(&employer, &id, &500);
+    assert_eq!(client.get_stream(&id).deposit, 1500);
+
+    // Resume and advance 120s more → 30s pre-pause + 120s post-resume = 150s * 10 = 1500
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    client.resume_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 120);
+    assert_eq!(client.claimable(&id), 1500);
+}
