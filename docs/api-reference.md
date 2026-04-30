@@ -723,7 +723,76 @@ Admin mints new tokens to an address, increasing total supply.
 **Example:**
 ```bash
 stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
-  -- mint --admin <ADMIN_ADDRESS> --to <RECIPIENT_ADDRESS> --amount 1000000
+  -- mint --caller <ADMIN_ADDRESS> --to <RECIPIENT_ADDRESS> --amount 1000000
+```
+
+---
+
+### `add_minter`
+
+Grant minter authorization to an address.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+| `minter` | `Address` | Address to authorize as a minter |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
+  -- add_minter --admin <ADMIN_ADDRESS> --minter <MINTER_ADDRESS>
+```
+
+---
+
+### `remove_minter`
+
+Revoke minter authorization from an address.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+| `minter` | `Address` | Address to remove from minter role |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
+  -- remove_minter --admin <ADMIN_ADDRESS> --minter <MINTER_ADDRESS>
+```
+
+---
+
+### `is_minter`
+
+Check whether an address has the minter role.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `address` | `Address` | Address to query |
+
+**Returns:**
+- `true` if the address is authorized to mint, `false` otherwise
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ANY_KEY> --network testnet \
+  -- is_minter --address <ADDRESS>
 ```
 
 ---

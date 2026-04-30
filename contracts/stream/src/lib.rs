@@ -14,6 +14,9 @@ mod test;
 #[cfg(test)]
 mod auth_tests;
 
+#[cfg(test)]
+mod multisig_tests;
+
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use access_control::{
     require_admin, require_employee, require_employee_by_id, require_employer,
@@ -351,7 +354,7 @@ impl StreamContract {
 
         stream.status = StreamStatus::Cancelled;
         save_stream(&env, &stream);
-        events::stream_status_changed(&env, stream_id, &StreamStatus::Cancelled);
+        events::stream_cancelled(&env, stream_id, &employer, &stream.employee, refund, claimable);
     }
 
     pub fn propose_employer_transfer(env: Env, employer: Address, stream_id: u64, new_employer: Address) {
