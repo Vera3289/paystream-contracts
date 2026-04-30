@@ -1455,3 +1455,78 @@ fn test_no_extra_claimable_after_stop_time() {
     env.ledger().with_mut(|l| l.timestamp = stop + 10_000);
     assert_eq!(client.claimable(&id), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #66 – Time manipulation resistance tests
+// ---------------------------------------------------------------------------
+
+/// A rolled-back (non-monotonic) timestamp must yield claimable == 0.
+/// saturating_sub in claimable_amount prevents underflow and returns 0.
+#[test]
+fn test_non_monotonic_timestamp_yields_zero_claimable() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // Start at timestamp 1000.
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+
+    // Advance normally — 100 s claimable.
+    env.ledger().with_mut(|l| l.timestamp = 1100);
+    assert_eq!(client.claimable(&id), 1000);
+
+    // Simulate a rolled-back timestamp (now < last_withdraw_time after a withdraw).
+    env.ledger().with_mut(|l| l.timestamp = 1100);
+    client.withdraw(&employee, &id);
+
+    // Roll back to before the withdraw time.
+    env.ledger().with_mut(|l| l.timestamp = 1050);
+    // saturating_sub → 0; no panic, no over-payment.
+    assert_eq!(client.claimable(&id), 0);
+}
+
+/// A far-future timestamp must not allow withdrawal beyond the deposited amount.
+#[test]
+fn test_far_future_timestamp_capped_by_deposit() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let deposit: i128 = 5_000;
+    let id = client.create_stream(&employer, &employee, &token_id, &deposit, &10, &0, &0, &0);
+
+    // Jump far into the future — earned would be astronomically large.
+    env.ledger().with_mut(|l| l.timestamp += 1_000_000_000);
+    // Claimable must be capped at deposit.
+    assert_eq!(client.claimable(&id), deposit);
+
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, deposit);
+}
+
+/// stop_time caps accrual even when the ledger timestamp is far beyond it.
+#[test]
+fn test_stop_time_caps_accrual_on_timestamp_leap() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    // Stream runs for 100 s (stop_time = 1100), rate = 10 → max payout = 1000.
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &1100, &0, &0);
+
+    // Leap far past stop_time.
+    env.ledger().with_mut(|l| l.timestamp = 9_999_999);
+    // Accrual is capped at stop_time: (1100 - 1000) * 10 = 1000.
+    assert_eq!(client.claimable(&id), 1000);
+}
