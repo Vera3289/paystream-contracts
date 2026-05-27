@@ -17,6 +17,7 @@ const governanceRoutes = require('./routes/governance');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const startedAt = new Date();
 
 // Security middleware
 app.use(helmet());
@@ -146,6 +147,8 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    started_at: startedAt.toISOString(),
     version: '1.0.0',
   });
 });
