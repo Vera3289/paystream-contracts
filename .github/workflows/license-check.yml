@@ -1,0 +1,35 @@
+name: License Check
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans advisories sources
+          arguments: --workspace
+
+  hawkeye:
+    name: License headers (hawkeye)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install hawkeye
+        run: cargo install --locked hawkeye
+
+      - name: Check license headers
+        run: hawkeye check

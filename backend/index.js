@@ -1,5 +1,6 @@
 const express = require('express');
 const { createIpRateLimiter, createWalletRateLimiter } = require('./middleware/rateLimiter');
+const { pool } = require('./db/pool');
 
 const app = express();
 app.use(express.json());

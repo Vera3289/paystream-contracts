@@ -1,0 +1,20 @@
+# Smart contract files
+/contracts/ @security-team
+src/lib.rs @security-team
+src/contract*.rs @security-team
+
+# CI/CD pipelines and configuration
+.github/workflows/ @devops-team
+Dockerfile @devops-team
+docker-compose.yml @devops-team
+Makefile @devops-team
+
+# Root configuration files
+Cargo.toml @devops-team
+Cargo.lock @devops-team
+rust-toolchain.toml @devops-team
+
+# Documentation and policies
+SECURITY.md @security-team
+CONTRIBUTING.md @security-team
+DEPLOYMENT_CHECKLIST.md @devops-team

@@ -1,0 +1,20 @@
+services:
+  build:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+
+  test:
+    build:
+      context: .
+      target: test
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+    command: cargo test
+
+volumes:
+  cargo-cache:

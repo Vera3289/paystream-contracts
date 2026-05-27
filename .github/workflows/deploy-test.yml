@@ -1,0 +1,106 @@
+name: Deploy Scripts Test
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'scripts/**'
+      - 'contracts/**'
+      - '.github/workflows/deploy-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'contracts/**'
+      - '.github/workflows/deploy-test.yml'
+
+jobs:
+  deploy-test:
+    name: Deploy & Smoke Test (local node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-deploy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deploy-
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --features opt
+
+      - name: Build contracts
+        run: stellar contract build
+
+      - name: Start local Stellar node
+        run: stellar network start local --docker-pull-image &
+
+      - name: Wait for local node to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if stellar network ls 2>/dev/null | grep -q local; then
+              echo "Local node ready"
+              break
+            fi
+            echo "Waiting for local node... ($i/30)"
+            sleep 2
+          done
+
+      - name: Generate deploy account
+        run: |
+          stellar keys generate --overwrite deployer --network local
+          stellar keys address deployer
+
+      - name: Fund deploy account
+        run: stellar keys fund deployer --network local
+
+      - name: Deploy contracts
+        env:
+          STELLAR_SOURCE_ACCOUNT: deployer
+        run: |
+          TOKEN_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/paystream_token.wasm \
+            --source deployer --network local)
+          echo "TOKEN_CONTRACT_ID=$TOKEN_ID" >> "$GITHUB_ENV"
+          echo "Token deployed: $TOKEN_ID"
+
+          STREAM_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/paystream_stream.wasm \
+            --source deployer --network local)
+          echo "STREAM_CONTRACT_ID=$STREAM_ID" >> "$GITHUB_ENV"
+          echo "Stream deployed: $STREAM_ID"
+
+      - name: Initialise contracts (smoke test)
+        run: |
+          ADMIN=$(stellar keys address deployer)
+
+          stellar contract invoke \
+            --id "$TOKEN_CONTRACT_ID" \
+            --source deployer --network local \
+            -- initialize --admin "$ADMIN" --initial_supply 1000000000
+          echo "Token initialised"
+
+          stellar contract invoke \
+            --id "$STREAM_CONTRACT_ID" \
+            --source deployer --network local \
+            -- initialize --admin "$ADMIN"
+          echo "Stream contract initialised"
+
+      - name: Smoke test — stream_count returns 0
+        run: |
+          COUNT=$(stellar contract invoke \
+            --id "$STREAM_CONTRACT_ID" \
+            --source deployer --network local \
+            -- stream_count)
+          echo "stream_count=$COUNT"
+          [ "$COUNT" = "0" ] || (echo "Expected 0, got $COUNT" && exit 1)
