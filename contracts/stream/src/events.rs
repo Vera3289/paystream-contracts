@@ -10,6 +10,13 @@ pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address
     );
 }
 
+pub fn stream_transferred(env: &Env, id: u64, previous_employee: &Address, new_employee: &Address) {
+    env.events().publish(
+        (symbol_short!("transferred"), id),
+        (previous_employee.clone(), new_employee.clone()),
+    );
+}
+
 pub fn withdrawn(env: &Env, id: u64, employee: &Address, amount: i128) {
     env.events().publish(
         (symbol_short!("withdraw"), id),
