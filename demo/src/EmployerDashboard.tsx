@@ -3,6 +3,7 @@ import React from "react";
 import { useEmployerDashboard } from "./useEmployerDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
 import type { Stream } from "@paystream/sdk";
+import type { FiatCurrency, TokenPricingMetadata } from "./useFiatPrice";
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -43,9 +44,17 @@ function StatCard({ id, label, value, icon, accentVar }: StatCardProps) {
 interface EmployerDashboardProps {
   /** Optional public key from an already-connected wallet in the parent. */
   walletPublicKey?: string | null;
+  fiatCurrency?: FiatCurrency;
+  getTokenPrice?: (token: string) => number | undefined;
+  getTokenLabel?: (token: string) => string;
 }
 
-export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
+export function EmployerDashboard({
+  walletPublicKey,
+  fiatCurrency,
+  getTokenPrice,
+  getTokenLabel,
+}: EmployerDashboardProps) {
   const {
     publicKey,
     streams,
@@ -263,6 +272,9 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
               <StreamStatusCard
                 key={k}
                 stream={s}
+                tokenSymbol={getTokenLabel?.(s.token)}
+                fiatCurrency={fiatCurrency}
+                tokenPrice={getTokenPrice?.(s.token) ?? null}
                 actionLoading={streamActionLoading}
                 onPause={() => handleAction("pause", s.id)}
                 onResume={() => handleAction("resume", s.id)}
