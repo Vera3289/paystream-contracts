@@ -10,6 +10,7 @@ import { EmployeeDashboard } from "./EmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
 import { WalletButton } from "./WalletButton";
 import { WalletModal } from "./WalletModal";
+import { StreamCreationForm } from "./StreamCreationForm";
 
 const STROOP = 10_000_000n; // 1 XLM in stroops
 
@@ -370,64 +371,12 @@ export default function App() {
         {/* ── Create Stream ── */}
         <section className="card" aria-labelledby="create-heading">
           <h2 id="create-heading">Create Stream</h2>
-          <form onSubmit={handleCreate} noValidate aria-label="Create a new salary stream">
-            <Field
-              label="Employee address"
-              value={employee}
-              onChange={setEmployee}
-              placeholder="G..."
-              error={formErrors.employee}
-              required
-            />
-            <Field
-              label="Token contract ID"
-              value={token}
-              onChange={setToken}
-              placeholder="C..."
-              error={formErrors.token}
-              required
-            />
-            <Field
-              label="Deposit (XLM)"
-              value={deposit}
-              onChange={setDeposit}
-              type="number"
-              min="0"
-              step="any"
-              error={formErrors.deposit}
-              required
-            />
-            <Field
-              label="Rate (stroops/sec)"
-              value={rate}
-              onChange={setRate}
-              type="number"
-              min="0"
-              step="1"
-              error={formErrors.rate}
-              required
-            />
-            <Field
-              label="Stop time (unix timestamp, 0 = indefinite)"
-              value={stopTime}
-              onChange={setStopTime}
-              type="number"
-              min="0"
-              step="1"
-              error={formErrors.stopTime}
-            />
-            {duration && (
-              <p className="duration-hint" aria-live="polite">
-                ⏱ Estimated stream duration: <strong>{duration}</strong>
-              </p>
-            )}
-            <button type="submit" disabled={loading || !publicKey} className="btn" aria-busy={loading}>
-              {loading ? "Creating…" : "Create Stream"}
-            </button>
-            {!publicKey && (
-              <p className="field-hint">Connect your wallet to create a stream.</p>
-            )}
-          </form>
+          <StreamCreationForm
+            defaultToken={CONFIG.defaultToken}
+            onSubmit={createStream}
+            loading={loading}
+            walletConnected={!!publicKey}
+          />
         </section>
 
         {/* ── Load Stream ── */}
