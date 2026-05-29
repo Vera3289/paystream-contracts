@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import React from "react";
 import type { Stream } from "@paystream/sdk";
-import { explorerAccountUrl, explorerTxUrl } from "./config";
+import { StreamStatusBadge, StreamStatus } from "./StreamStatusBadge";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -195,12 +195,7 @@ export function StreamStatusCard({
       <header className="ssc-header">
         <div className="ssc-title-row">
           <h3 className="ssc-stream-id">Stream #{key}</h3>
-          <span
-            className={`status-badge status-${stream.status.toLowerCase()}`}
-            aria-label={`Status: ${stream.status}`}
-          >
-            {stream.status}
-          </span>
+          <StreamStatusBadge status={stream.status as StreamStatus} />
         </div>
         <p className="ssc-employee">
           <span className="ssc-field-label">Employee:</span>{" "}

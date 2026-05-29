@@ -18,10 +18,10 @@
   --error-bg: #fff0f0;
   --error-border: #f88888;
   --error-text: #cc0000;
-  --status-active: #2a9d2a;
-  --status-paused: #e6a817;
+  --status-active: #2a8d2a;
+  --status-paused: #a67100;
   --status-cancelled: #cc3333;
-  --status-exhausted: #888888;
+  --status-exhausted: #666666;
   --focus-ring: #1a73e8;
 }
 
@@ -265,14 +265,97 @@ body {
 }
 
 /* ── Status badges ── */
-.status-badge {
-  font-weight: 600;
+.status-badge-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
 }
 
-.status-active { color: var(--status-active); }
-.status-paused { color: var(--status-paused); }
-.status-cancelled { color: var(--status-cancelled); }
-.status-exhausted { color: var(--status-exhausted); }
+.status-badge {
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: help;
+  border: 1px solid currentColor;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  transition: filter 0.2s;
+}
+
+.status-badge:hover {
+  filter: brightness(0.9);
+}
+
+.status-active {
+  color: var(--status-active);
+  background-color: color-mix(in srgb, var(--status-active), transparent 90%);
+}
+
+.status-paused {
+  color: var(--status-paused);
+  background-color: color-mix(in srgb, var(--status-paused), transparent 90%);
+}
+
+.status-cancelled {
+  color: var(--status-cancelled);
+  background-color: color-mix(in srgb, var(--status-cancelled), transparent 90%);
+}
+
+.status-exhausted {
+  color: var(--status-exhausted);
+  background-color: color-mix(in srgb, var(--status-exhausted), transparent 90%);
+}
+
+.status-tooltip {
+  visibility: hidden;
+  width: 220px;
+  background-color: #333333;
+  color: #ffffff;
+  text-align: center;
+  border-radius: 6px;
+  padding: 8px 12px;
+  position: absolute;
+  z-index: 100;
+  bottom: 140%;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 0.2s, visibility 0.2s;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  white-space: normal;
+}
+
+[data-theme="dark"] .status-tooltip {
+  background-color: #444444;
+}
+
+.status-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -6px;
+  border-width: 6px;
+  border-style: solid;
+  border-color: #333333 transparent transparent transparent;
+}
+
+[data-theme="dark"] .status-tooltip::after {
+  border-color: #444444 transparent transparent transparent;
+}
+
+.status-badge-container:hover .status-tooltip {
+  visibility: visible;
+  opacity: 1;
+}
 
 /* ── Muted text ── */
 .muted {
