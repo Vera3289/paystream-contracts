@@ -55,6 +55,7 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
     error,
     scanned,
     chainTotal,
+    lastTxHashes,
     connect,
     refresh,
     handleAction,
@@ -263,6 +264,7 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
               <StreamStatusCard
                 key={k}
                 stream={s}
+                lastTxHash={lastTxHashes[k] ?? null}
                 actionLoading={streamActionLoading}
                 onPause={() => handleAction("pause", s.id)}
                 onResume={() => handleAction("resume", s.id)}
@@ -272,20 +274,34 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
                   setTopUpAmount("");
                 }}
               >
-                {/* Inline Top-up Form */}
+                {/* Inline Top-up Form (#225) */}
                 {isToppingUp && (
                   <form
                     className="history-panel"
                     onSubmit={handleTopUpSubmit}
                     aria-label={`Top up stream ${k}`}
                   >
-                    <h3>Top Up Stream</h3>
+                    <h3>Top Up Stream #{k}</h3>
+                    <dl className="topup-summary">
+                      <div className="topup-summary-row">
+                        <dt>Current deposit</dt>
+                        <dd>{(Number(s.deposit) / 10_000_000).toFixed(4)} XLM</dd>
+                      </div>
+                      {topUpAmount && !isNaN(parseFloat(topUpAmount)) && parseFloat(topUpAmount) > 0 && (
+                        <div className="topup-summary-row topup-summary-new">
+                          <dt>New total</dt>
+                          <dd>
+                            {((Number(s.deposit) / 10_000_000) + parseFloat(topUpAmount)).toFixed(4)} XLM
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
                     <div className="form-group" style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
                       <input
                         type="number"
                         step="0.0001"
                         min="0.0001"
-                        placeholder="Amount in XLM"
+                        placeholder="Additional amount (XLM)"
                         value={topUpAmount}
                         onChange={(e) => setTopUpAmount(e.target.value)}
                         required
@@ -296,7 +312,7 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
                       <button
                         type="submit"
                         className="btn btn-success"
-                        disabled={!!actionLoading || !topUpAmount}
+                        disabled={!!actionLoading || !topUpAmount || parseFloat(topUpAmount) <= 0}
                         aria-busy={streamActionLoading === "topup"}
                       >
                         {streamActionLoading === "topup" ? "Confirming…" : "Confirm Top Up"}

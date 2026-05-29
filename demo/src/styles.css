@@ -884,3 +884,144 @@ code {
   background: var(--bg-history);
   border-top: 1px solid var(--border);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ISSUE #239 — Stellar Explorer links
+══════════════════════════════════════════════════════════════════════════════ */
+
+.explorer-link {
+  color: var(--btn-bg);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.explorer-link:hover {
+  opacity: 0.8;
+  border-bottom-style: solid;
+}
+
+.ssc-last-tx {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ISSUE #225 — Top-up summary
+══════════════════════════════════════════════════════════════════════════════ */
+
+.topup-summary {
+  display: flex;
+  gap: 24px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.topup-summary-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.topup-summary-row dt {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.topup-summary-row dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.topup-summary-new dd {
+  color: var(--status-active);
+  font-weight: 700;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ISSUE #230 — Batch create streams
+══════════════════════════════════════════════════════════════════════════════ */
+
+.batch-header-row {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .batch-header-row {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    padding: 0 2px;
+  }
+}
+
+.batch-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+@media (min-width: 640px) {
+  .batch-row {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .batch-row > div:first-child { flex: 3; }
+  .batch-row > div:nth-child(2),
+  .batch-row > div:nth-child(3),
+  .batch-row > div:nth-child(4) { flex: 1.5; }
+}
+
+.batch-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.batch-total {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.batch-total strong {
+  color: var(--text);
+}
+
+/* ── Success banner ── */
+.success-banner {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  color: #166534;
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+[data-theme="dark"] .success-banner {
+  background: #052e16;
+  border-color: #166534;
+  color: #86efac;
+}
