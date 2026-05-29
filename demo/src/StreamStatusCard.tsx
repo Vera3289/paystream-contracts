@@ -27,6 +27,28 @@ function isoTs(ts: bigint): string {
   return new Date(Number(ts) * 1000).toISOString();
 }
 
+// ─── ExplorerLink (#239) ──────────────────────────────────────────────────────
+
+interface ExplorerLinkProps {
+  href: string;
+  label: string;
+  children: React.ReactNode;
+}
+
+function ExplorerLink({ href, label, children }: ExplorerLinkProps) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={label}
+      className="explorer-link"
+    >
+      {children}
+    </a>
+  );
+}
+
 // ─── MetricItem ───────────────────────────────────────────────────────────────
 
 interface MetricItemProps {
@@ -85,6 +107,11 @@ export interface StreamStatusCardProps {
   onExportCsv?: () => void;
   /** Employer: top up the stream with more XLM. */
   onShowTopUp?: () => void;
+  /**
+   * Optional last transaction hash — shown as an explorer link (#239).
+   * Pass the hash returned by submitTransaction after any action.
+   */
+  lastTxHash?: string | null;
 
   // ── Loading state ──
   /** True while any transaction is in flight (disables all buttons). */
@@ -120,6 +147,7 @@ export function StreamStatusCard({
   onShowHistory,
   onExportCsv,
   onShowTopUp,
+  lastTxHash = null,
   loading = false,
   actionLoading = null,
   children,
@@ -171,12 +199,25 @@ export function StreamStatusCard({
         </div>
         <p className="ssc-employee">
           <span className="ssc-field-label">Employee:</span>{" "}
-          <code
-            title={stream.employee}
-            aria-label={`Employee address: ${stream.employee}`}
+          <ExplorerLink
+            href={explorerAccountUrl(stream.employee)}
+            label={`View employee account ${stream.employee} on Stellar Explorer`}
           >
-            {stream.employee}
-          </code>
+            <code title={stream.employee} aria-label={`Employee address: ${stream.employee}`}>
+              {stream.employee.slice(0, 6)}…{stream.employee.slice(-4)}
+            </code>
+          </ExplorerLink>
+        </p>
+        <p className="ssc-employee">
+          <span className="ssc-field-label">Employer:</span>{" "}
+          <ExplorerLink
+            href={explorerAccountUrl(stream.employer)}
+            label={`View employer account ${stream.employer} on Stellar Explorer`}
+          >
+            <code title={stream.employer} aria-label={`Employer address: ${stream.employer}`}>
+              {stream.employer.slice(0, 6)}…{stream.employer.slice(-4)}
+            </code>
+          </ExplorerLink>
         </p>
       </header>
 
@@ -345,6 +386,19 @@ export function StreamStatusCard({
 
       {/* ── Expandable slot (e.g. inline history panel) ── */}
       {children}
+
+      {/* ── Last transaction link (#239) ── */}
+      {lastTxHash && (
+        <div className="ssc-last-tx">
+          <span className="ssc-field-label">Last tx:</span>{" "}
+          <ExplorerLink
+            href={explorerTxUrl(lastTxHash)}
+            label={`View transaction ${lastTxHash} on Stellar Explorer`}
+          >
+            <code>{lastTxHash.slice(0, 8)}…{lastTxHash.slice(-6)}</code>
+          </ExplorerLink>
+        </div>
+      )}
     </article>
   );
 }

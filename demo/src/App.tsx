@@ -8,32 +8,45 @@ import { exportAllHistory } from "./csvExport";
 import { EmployerDashboard } from "./EmployerDashboard";
 import { EmployeeDashboard } from "./EmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
+import { BatchCreateStreams } from "./BatchCreateStreams";
 
 const STROOP = 10_000_000n; // 1 XLM in stroops
 
 // ─── Dark mode ───────────────────────────────────────────────────────────────
 
 function useDarkMode(): [boolean, () => void] {
-  const [dark, setDark] = useState<boolean>(() => {
-    const stored = localStorage.getItem("paystream-dark");
-    if (stored !== null) return stored === "true";
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
-  });
+  // Issue #240: Initialize to false (safe SSR default) and read localStorage
+  // only after mount to avoid hydration mismatches.
+  const [dark, setDark] = useState<boolean>(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    // Runs client-side only — safe to access window/localStorage here.
+    const stored = localStorage.getItem("paystream-dark");
+    const prefersDark =
+      stored !== null
+        ? stored === "true"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    setDark(prefersDark);
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     localStorage.setItem("paystream-dark", String(dark));
-  }, [dark]);
+  }, [dark, mounted]);
 
-  // Also respond to OS-level changes when no manual override has been set
+  // Respond to OS-level changes when no manual override has been set
   useEffect(() => {
+    if (!mounted) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e: MediaQueryListEvent) => {
       if (localStorage.getItem("paystream-dark") === null) setDark(e.matches);
     };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
-  }, []);
+  }, [mounted]);
 
   return [dark, () => setDark((d) => !d)];
 }
@@ -89,7 +102,7 @@ function estimatedDuration(deposit: string, rate: string): string | null {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-type AppView = "demo" | "dashboard" | "employee";
+type AppView = "demo" | "dashboard" | "employee" | "batch";
 
 export default function App() {
   const [dark, toggleDark] = useDarkMode();
@@ -245,7 +258,27 @@ export default function App() {
         >
           💳 Employee Earnings
         </button>
+        <button
+          role="tab"
+          id="tab-batch"
+          aria-selected={view === "batch"}
+          aria-controls="panel-batch"
+          className={`tab-btn${view === "batch" ? " tab-active" : ""}`}
+          onClick={() => setView("batch")}
+        >
+          📋 Batch Create
+        </button>
       </nav>
+
+      {/* ── Batch Create panel ── */}
+      <div
+        role="tabpanel"
+        id="panel-batch"
+        aria-labelledby="tab-batch"
+        hidden={view !== "batch"}
+      >
+        <BatchCreateStreams walletPublicKey={publicKey} />
+      </div>
 
       {/* ── Employer Dashboard panel ── */}
       <div
