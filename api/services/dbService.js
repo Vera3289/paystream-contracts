@@ -17,6 +17,12 @@ if (databaseUrl) {
 const inMemoryPrefs = new Map();
 const inMemoryNotifications = new Map();
 
+async function closePool() {
+  if (pool) {
+    await pool.end();
+  }
+}
+
 /**
  * Delete all off-chain user data for a given Stellar address.
  */
@@ -62,6 +68,7 @@ async function deleteOffChainUserData(address) {
 
 module.exports = {
   pool,
+  closePool,
   inMemoryPrefs,
   inMemoryNotifications,
   deleteOffChainUserData,
