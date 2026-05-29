@@ -567,16 +567,6 @@ function Field({
   );
 }
 
-// ─── StatusBadge ─────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <span className={`status-badge status-${status.toLowerCase()}`} aria-label={`Status: ${status}`}>
-      {status}
-    </span>
-  );
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatXlm(stroops: bigint): string {
