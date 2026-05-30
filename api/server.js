@@ -1,3 +1,4 @@
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -7,6 +8,9 @@ const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 require('dotenv').config();
 
+const correlationId = require('./middleware/correlationId');
+const { loadSecrets } = require('./services/secretsService');
+const { closePool } = require('./services/dbService');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const authRoutes = require('./routes/auth');
@@ -19,6 +23,14 @@ const userRoutes = require('./routes/users');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const startedAt = new Date();
+
+morgan.token('correlation-id', (req) => req.correlationId || '-');
+app.use(correlationId);
+
+const logFormat = ':remote-addr :method :url :status :res[content-length] - :response-time ms :correlation-id';
+if (process.env.NODE_ENV !== 'test') {
+  app.use(morgan(logFormat));
+}
 
 // Security middleware
 app.use(helmet());
@@ -187,23 +199,69 @@ app.use('*', (req, res) => {
 // Error handling middleware
 app.use(errorHandler);
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  process.exit(0);
-});
+let server;
+let isShuttingDown = false;
 
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  process.exit(0);
-});
+function stopServer() {
+  return new Promise((resolve, reject) => {
+    if (!server) {
+      return resolve();
+    }
+    server.close((err) => {
+      if (err) {
+        return reject(err);
+      }
+      resolve();
+    });
+  });
+}
+
+async function shutdown(signal) {
+  if (isShuttingDown) {
+    return;
+  }
+  isShuttingDown = true;
+  console.log(`[Shutdown] ${signal} received, stopping new connections and waiting up to 30s for in-flight requests`);
+
+  const forceExit = setTimeout(() => {
+    console.error('[Shutdown] Force exiting after 30 seconds');
+    process.exit(1);
+  }, 30000);
+
+  try {
+    await stopServer();
+    await closePool();
+    console.log('[Shutdown] Database connection closed');
+  } catch (err) {
+    console.error('[Shutdown] Error during graceful shutdown', err);
+  } finally {
+    clearTimeout(forceExit);
+    console.log('[Shutdown] Complete');
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+async function start() {
+  try {
+    await loadSecrets();
+
+    server = http.createServer(app);
+    server.listen(PORT, () => {
+      console.log(`PayStream REST API server running on port ${PORT}`);
+      console.log(`API documentation available at http://localhost:${PORT}/api-docs`);
+      console.log(`Health check available at http://localhost:${PORT}/health`);
+    });
+  } catch (error) {
+    console.error('[Startup] Failed to initialize API server', error);
+    process.exit(1);
+  }
+}
 
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`PayStream REST API server running on port ${PORT}`);
-    console.log(`API documentation available at http://localhost:${PORT}/api-docs`);
-    console.log(`Health check available at http://localhost:${PORT}/health`);
-  });
+  start();
 }
 
 module.exports = app;
