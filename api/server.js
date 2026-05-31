@@ -9,6 +9,7 @@ const swaggerUi = require('swagger-ui-express');
 require('dotenv').config();
 
 const correlationId = require('./middleware/correlationId');
+const { apmMiddleware, getMetrics } = require('./middleware/apm');
 const { loadSecrets } = require('./services/secretsService');
 const { closePool } = require('./services/dbService');
 const authMiddleware = require('./middleware/auth');
@@ -28,6 +29,7 @@ const startedAt = new Date();
 
 morgan.token('correlation-id', (req) => req.correlationId || '-');
 app.use(correlationId);
+app.use(apmMiddleware);
 
 const logFormat = ':remote-addr :method :url :status :res[content-length] - :response-time ms :correlation-id';
 if (process.env.NODE_ENV !== 'test') {
@@ -258,6 +260,11 @@ app.get('/ready', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// APM metrics endpoint — exposes p50/p95/p99 latency and error rates (#300)
+app.get('/metrics', (req, res) => {
+  res.json(getMetrics());
 });
 
 // Auth routes (public — no authMiddleware)
