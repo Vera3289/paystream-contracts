@@ -4,6 +4,8 @@ import { useEmployerDashboard } from "./useEmployerDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
 import { CancelConfirmModal } from "./CancelConfirmModal";
 import { StreamCardSkeleton } from "./StreamCardSkeleton";
+import { Pagination } from "./Pagination";
+import { usePagination } from "./usePagination";
 import type { Stream } from "@paystream/sdk";
 import type { FiatCurrency, TokenPricingMetadata } from "./useFiatPrice";
 
@@ -74,14 +76,29 @@ export function EmployerDashboard({
   } = useEmployerDashboard(walletPublicKey);
 
   const [statusFilter, setStatusFilter] = React.useState<string>("all");
+  const [tokenFilter, setTokenFilter] = React.useState<string>("all");
+  const [searchQuery, setSearchQuery] = React.useState<string>("");
   const [topUpStreamId, setTopUpStreamId] = React.useState<bigint | null>(null);
   const [topUpAmount, setTopUpAmount] = React.useState<string>("");
   const [cancelStream, setCancelStream] = React.useState<Stream | null>(null);
 
-  const filtered =
-    statusFilter === "all"
-      ? streams
-      : streams.filter((s) => s.status.toLowerCase() === statusFilter);
+  // Unique tokens for filter dropdown (#231)
+  const uniqueTokens = React.useMemo(
+    () => Array.from(new Set(streams.map((s) => s.token))),
+    [streams]
+  );
+
+  // Combined search + filter (#231)
+  const filtered = React.useMemo(() => {
+    return streams.filter((s) => {
+      if (statusFilter !== "all" && s.status.toLowerCase() !== statusFilter) return false;
+      if (tokenFilter !== "all" && s.token !== tokenFilter) return false;
+      if (searchQuery.trim() && !s.employee.toLowerCase().includes(searchQuery.trim().toLowerCase())) return false;
+      return true;
+    });
+  }, [streams, statusFilter, tokenFilter, searchQuery]);
+
+  const { page, totalPages, pageItems, setPage } = usePagination(filtered);
 
   const scanMax = Math.min(chainTotal, 200);
   const scanPct = scanMax > 0 ? Math.min(100, Math.round((scanned / scanMax) * 100)) : 0;
@@ -200,7 +217,7 @@ export function EmployerDashboard({
               <button
                 key={opt.value}
                 className={`db-filter-btn${statusFilter === opt.value ? " db-filter-active" : ""}`}
-                onClick={() => setStatusFilter(opt.value)}
+                onClick={() => { setStatusFilter(opt.value); setPage(1); }}
                 aria-pressed={statusFilter === opt.value}
                 id={`filter-${opt.value}`}
               >
@@ -209,6 +226,41 @@ export function EmployerDashboard({
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Search & token filter (#231) ── */}
+      {streams.length > 0 && (
+        <div className="db-search-bar">
+          <label htmlFor="db-search" className="sr-only">Search by employee address</label>
+          <input
+            id="db-search"
+            className="input db-search-input"
+            type="search"
+            placeholder="Search by employee address…"
+            value={searchQuery}
+            onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+            aria-label="Search streams by employee address"
+          />
+          {uniqueTokens.length > 1 && (
+            <>
+              <label htmlFor="db-token-filter" className="sr-only">Filter by token</label>
+              <select
+                id="db-token-filter"
+                className="input db-token-select"
+                value={tokenFilter}
+                onChange={(e) => { setTokenFilter(e.target.value); setPage(1); }}
+                aria-label="Filter by token"
+              >
+                <option value="all">All tokens</option>
+                {uniqueTokens.map((t) => (
+                  <option key={t} value={t}>
+                    {t.length > 16 ? `${t.slice(0, 8)}…${t.slice(-4)}` : t}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
       )}
 
@@ -234,14 +286,21 @@ export function EmployerDashboard({
 
       {/* ── Stream cards ── */}
       {filtered.length > 0 && (
-        <div
-          className="db-stream-list"
-          role="list"
-          aria-label="Your employer streams"
-          aria-live="polite"
-          aria-busy={loading}
-        >
-          {filtered.map((s) => {
+        <>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPrev={() => setPage(page - 1)}
+            onNext={() => setPage(page + 1)}
+          />
+          <div
+            className="db-stream-list"
+            role="list"
+            aria-label="Your employer streams"
+            aria-live="polite"
+            aria-busy={loading}
+          >
+            {pageItems.map((s) => {
             const k = s.id.toString();
             // Map the "action-streamId" string to a simple action name
             const streamActionLoading =
@@ -349,7 +408,14 @@ export function EmployerDashboard({
               </StreamStatusCard>
             );
           })}
-        </div>
+          </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPrev={() => setPage(page - 1)}
+            onNext={() => setPage(page + 1)}
+          />
+        </>
       )}
 
       {/* ── Cancel confirmation modal (#236) ── */}

@@ -5,6 +5,8 @@ import { StreamStatusCard } from "./StreamStatusCard";
 import type { FiatCurrency } from "./useFiatPrice";
 import { useTransactionHistory } from "./useTransactionHistory";
 import { exportAllHistory } from "./csvExport";
+import { Pagination } from "./Pagination";
+import { usePagination } from "./usePagination";
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -73,11 +75,24 @@ export function EmployeeDashboard({
   const [historyStreamId, setHistoryStreamId] = React.useState<bigint | null>(null);
 
   const [statusFilter, setStatusFilter] = React.useState<string>("all");
+  const [tokenFilter, setTokenFilter] = React.useState<string>("all");
+  const [searchQuery, setSearchQuery] = React.useState<string>("");
 
-  const filtered =
-    statusFilter === "all"
-      ? streams
-      : streams.filter((s) => s.status.toLowerCase() === statusFilter);
+  const uniqueTokens = React.useMemo(
+    () => Array.from(new Set(streams.map((s) => s.token))),
+    [streams]
+  );
+
+  const filtered = React.useMemo(() => {
+    return streams.filter((s) => {
+      if (statusFilter !== "all" && s.status.toLowerCase() !== statusFilter) return false;
+      if (tokenFilter !== "all" && s.token !== tokenFilter) return false;
+      if (searchQuery.trim() && !s.employee.toLowerCase().includes(searchQuery.trim().toLowerCase())) return false;
+      return true;
+    });
+  }, [streams, statusFilter, tokenFilter, searchQuery]);
+
+  const { page, totalPages, pageItems, setPage } = usePagination(filtered);
 
   const scanMax = Math.min(chainTotal, 200);
   const scanPct = scanMax > 0 ? Math.min(100, Math.round((scanned / scanMax) * 100)) : 0;
@@ -226,7 +241,7 @@ export function EmployeeDashboard({
               <button
                 key={opt.value}
                 className={`db-filter-btn${statusFilter === opt.value ? " db-filter-active" : ""}`}
-                onClick={() => setStatusFilter(opt.value)}
+                onClick={() => { setStatusFilter(opt.value); setPage(1); }}
                 aria-pressed={statusFilter === opt.value}
                 id={`emp-filter-${opt.value}`}
               >
@@ -235,6 +250,41 @@ export function EmployeeDashboard({
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Search & token filter (#231) ── */}
+      {streams.length > 0 && (
+        <div className="db-search-bar">
+          <label htmlFor="emp-search" className="sr-only">Search by employee address</label>
+          <input
+            id="emp-search"
+            className="input db-search-input"
+            type="search"
+            placeholder="Search by employee address…"
+            value={searchQuery}
+            onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+            aria-label="Search streams by employee address"
+          />
+          {uniqueTokens.length > 1 && (
+            <>
+              <label htmlFor="emp-token-filter" className="sr-only">Filter by token</label>
+              <select
+                id="emp-token-filter"
+                className="input db-token-select"
+                value={tokenFilter}
+                onChange={(e) => { setTokenFilter(e.target.value); setPage(1); }}
+                aria-label="Filter by token"
+              >
+                <option value="all">All tokens</option>
+                {uniqueTokens.map((t) => (
+                  <option key={t} value={t}>
+                    {t.length > 16 ? `${t.slice(0, 8)}…${t.slice(-4)}` : t}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
       )}
 
@@ -251,92 +301,106 @@ export function EmployeeDashboard({
 
       {/* ── Stream cards ── */}
       {filtered.length > 0 && (
-        <div
-          className="db-stream-list"
-          role="list"
-          aria-label="Your incoming streams"
-          aria-live="polite"
-          aria-busy={loading}
-        >
-          {filtered.map((s) => {
-            const k = s.id.toString();
-            const claimable = claimableAmounts[k] ?? 0n;
-            const withdrawLoading = actionLoading === `withdraw-${k}` ? "withdraw" : null;
-            return (
-              <StreamStatusCard
-                key={k}
-                stream={s}
-                claimable={claimable}
-                tokenSymbol={getTokenLabel?.(s.token)}
-                fiatCurrency={fiatCurrency}
-                tokenPrice={getTokenPrice?.(s.token) ?? null}
-                actionLoading={withdrawLoading}
-                onWithdraw={s.status === "Active" ? () => withdraw(s.id) : undefined}
-                onShowHistory={() => handleShowHistory(s.id)}
-                onExportCsv={() => handleExportCsv(s.id)}
-                loading={loading}
-              >
-                {/* Inline history panel */}
-                {historyStreamId === s.id && (
-                  <div
-                    id={`emp-history-${k}`}
-                    className="history-panel"
-                    role="region"
-                    aria-label={`Transaction history for stream ${k}`}
-                  >
-                    <h3>Transaction History</h3>
-                    {history.error && (
-                      <p role="alert" className="error-banner">{history.error}</p>
-                    )}
-                    {history.records.length === 0 && !history.loading && !history.error && (
-                      <p className="muted">No transactions found.</p>
-                    )}
-                    {history.records.length > 0 && (
-                      <table className="history-table" aria-label="Transaction history">
-                        <thead>
-                          <tr>
-                            <th scope="col">Timestamp</th>
-                            <th scope="col">Type</th>
-                            <th scope="col">Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {history.records.map((r) => (
-                            <tr key={r.id}>
-                              <td>{r.timestamp ? new Date(r.timestamp).toLocaleString() : "—"}</td>
-                              <td>{r.type}</td>
-                              <td>{r.amount ?? "—"}</td>
+        <>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPrev={() => setPage(page - 1)}
+            onNext={() => setPage(page + 1)}
+          />
+          <div
+            className="db-stream-list"
+            role="list"
+            aria-label="Your incoming streams"
+            aria-live="polite"
+            aria-busy={loading}
+          >
+            {pageItems.map((s) => {
+              const k = s.id.toString();
+              const claimable = claimableAmounts[k] ?? 0n;
+              const withdrawLoading = actionLoading === `withdraw-${k}` ? "withdraw" : null;
+              return (
+                <StreamStatusCard
+                  key={k}
+                  stream={s}
+                  claimable={claimable}
+                  tokenSymbol={getTokenLabel?.(s.token)}
+                  fiatCurrency={fiatCurrency}
+                  tokenPrice={getTokenPrice?.(s.token) ?? null}
+                  actionLoading={withdrawLoading}
+                  onWithdraw={s.status === "Active" ? () => withdraw(s.id) : undefined}
+                  onShowHistory={() => handleShowHistory(s.id)}
+                  onExportCsv={() => handleExportCsv(s.id)}
+                  loading={loading}
+                >
+                  {/* Inline history panel */}
+                  {historyStreamId === s.id && (
+                    <div
+                      id={`emp-history-${k}`}
+                      className="history-panel"
+                      role="region"
+                      aria-label={`Transaction history for stream ${k}`}
+                    >
+                      <h3>Transaction History</h3>
+                      {history.error && (
+                        <p role="alert" className="error-banner">{history.error}</p>
+                      )}
+                      {history.records.length === 0 && !history.loading && !history.error && (
+                        <p className="muted">No transactions found.</p>
+                      )}
+                      {history.records.length > 0 && (
+                        <table className="history-table" aria-label="Transaction history">
+                          <thead>
+                            <tr>
+                              <th scope="col">Timestamp</th>
+                              <th scope="col">Type</th>
+                              <th scope="col">Amount</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    {history.loading && <p aria-live="polite" aria-busy="true">Loading…</p>}
-                    {history.hasMore && !history.loading && (
-                      <button
-                        onClick={() => history.loadMore(s.id)}
-                        className="btn btn-secondary"
-                        aria-label="Load more transactions"
-                      >
-                        Load more
-                      </button>
-                    )}
-                    {history.records.length > 0 && (
-                      <button
-                        onClick={() => handleExportCsv(s.id)}
-                        className="btn btn-secondary"
-                        style={{ marginTop: 8 }}
-                        aria-label={`Export all history for stream ${k} as CSV`}
-                      >
-                        Export all as CSV
-                      </button>
-                    )}
-                  </div>
-                )}
-              </StreamStatusCard>
-            );
-          })}
-        </div>
+                          </thead>
+                          <tbody>
+                            {history.records.map((r) => (
+                              <tr key={r.id}>
+                                <td>{r.timestamp ? new Date(r.timestamp).toLocaleString() : "—"}</td>
+                                <td>{r.type}</td>
+                                <td>{r.amount ?? "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {history.loading && <p aria-live="polite" aria-busy="true">Loading…</p>}
+                      {history.hasMore && !history.loading && (
+                        <button
+                          onClick={() => history.loadMore(s.id)}
+                          className="btn btn-secondary"
+                          aria-label="Load more transactions"
+                        >
+                          Load more
+                        </button>
+                      )}
+                      {history.records.length > 0 && (
+                        <button
+                          onClick={() => handleExportCsv(s.id)}
+                          className="btn btn-secondary"
+                          style={{ marginTop: 8 }}
+                          aria-label={`Export all history for stream ${k} as CSV`}
+                        >
+                          Export all as CSV
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </StreamStatusCard>
+              );
+            })}
+          </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            onPrev={() => setPage(page - 1)}
+            onNext={() => setPage(page + 1)}
+          />
+        </>
       )}
     </div>
   );

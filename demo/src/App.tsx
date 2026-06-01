@@ -11,6 +11,8 @@ import { EmployeeDashboard } from "./EmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
 import { BatchCreateStreams } from "./BatchCreateStreams";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { useToast } from "./useToast";
+import { ToastContainer } from "./ToastContainer";
 
 const STROOP = 10_000_000n; // 1 XLM in stroops
 
@@ -112,6 +114,11 @@ export default function App() {
   const { publicKey, streams, claimableAmounts, error, loading, connect, loadStream, createStream, withdraw } =
     usePayStream();
   const history = useTransactionHistory();
+  const { toasts, add: addToast, update: updateToast, dismiss: dismissToast } = useToast();
+
+  // Mobile nav state (#229)
+  const [navOpen, setNavOpen] = useState(false);
+  const navRef = React.useRef<HTMLDivElement>(null);
 
   // Wallet modal state
   const [walletModalOpen, setWalletModalOpen] = useState(false);
@@ -152,6 +159,42 @@ export default function App() {
       await connect();
     }
   };
+
+  // Mobile nav: close on outside click or Escape (#229)
+  useEffect(() => {
+    if (!navOpen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNavOpen(false); };
+    const handleClick = (e: MouseEvent) => {
+      if (navRef.current && !navRef.current.contains(e.target as Node)) setNavOpen(false);
+    };
+    document.addEventListener("keydown", handleKey);
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [navOpen]);
+
+  // Focus trap for mobile nav (#229)
+  useEffect(() => {
+    if (!navOpen || !navRef.current) return;
+    const focusable = navRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first?.focus(); }
+      }
+    };
+    document.addEventListener("keydown", trap);
+    first?.focus();
+    return () => document.removeEventListener("keydown", trap);
+  }, [navOpen]);
 
   const applyTemplate = (tpl: StreamTemplate) => {
     setEmployee("");
@@ -197,13 +240,19 @@ export default function App() {
     setFormErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
-    await createStream(
-      employee,
-      token,
-      BigInt(Math.round(parseFloat(deposit) * Number(STROOP))),
-      BigInt(Math.round(parseFloat(rate))),
-      BigInt(stopTime || "0")
-    );
+    const toastId = addToast("pending", "Submitting stream creation…");
+    try {
+      const hash = await createStream(
+        employee,
+        token,
+        BigInt(Math.round(parseFloat(deposit) * Number(STROOP))),
+        BigInt(Math.round(parseFloat(rate))),
+        BigInt(stopTime || "0")
+      );
+      updateToast(toastId, "success", "Stream created successfully!", hash as string | undefined);
+    } catch {
+      updateToast(toastId, "error", "Stream creation failed.");
+    }
   };
 
   const handleLookup = async (e: React.FormEvent) => {
@@ -267,8 +316,18 @@ export default function App() {
     if (submitted) setFormErrors(validateForm(employee, token, deposit, rate, stopTime));
   }, [employee, token, deposit, rate, stopTime, submitted]);
 
+  const NAV_ITEMS: { v: AppView; label: string }[] = [
+    { v: "demo", label: "🖥 Stream Demo" },
+    { v: "dashboard", label: "💼 Employer Dashboard" },
+    { v: "employee", label: "💳 Employee Earnings" },
+    { v: "batch", label: "📋 Batch Create" },
+  ];
+
   return (
     <div className="app-root" id="main-content">
+      {/* ── Toast notifications (#227) ── */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
       {/* ── Header ── */}
       <header className="app-header" role="banner">
         <h1>💸 PayStream Demo</h1>
@@ -288,9 +347,42 @@ export default function App() {
             >
               {dark ? "☀️ Light" : "🌙 Dark"}
             </button>
+            {/* Hamburger (#229) */}
+            <button
+              className="hamburger-btn"
+              aria-label={navOpen ? "Close menu" : "Open menu"}
+              aria-expanded={navOpen}
+              aria-controls="mobile-nav"
+              onClick={() => setNavOpen((o) => !o)}
+            >
+              <span className="hamburger-icon" aria-hidden="true">{navOpen ? "✕" : "☰"}</span>
+            </button>
           </div>
         </div>
       </header>
+
+      {/* ── Mobile nav drawer (#229) ── */}
+      {navOpen && <div className="nav-overlay" aria-hidden="true" onClick={() => setNavOpen(false)} />}
+      <div
+        id="mobile-nav"
+        className={`mobile-nav${navOpen ? " mobile-nav-open" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation menu"
+        ref={navRef}
+      >
+        <button className="mobile-nav-close btn btn-secondary" onClick={() => setNavOpen(false)} aria-label="Close menu">✕ Close</button>
+        {NAV_ITEMS.map(({ v, label }) => (
+          <button
+            key={v}
+            className={`mobile-nav-item${view === v ? " mobile-nav-active" : ""}`}
+            onClick={() => { setView(v); setNavOpen(false); }}
+            aria-current={view === v ? "page" : undefined}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       {/* ── Wallet Modal ── */}
       <WalletModal
@@ -303,49 +395,20 @@ export default function App() {
 
       {/* ── View tabs ── */}
       <nav className="view-tabs" role="tablist" aria-label="Application views">
-        <button
-          role="tab"
-          id="tab-demo"
-          aria-selected={view === "demo"}
-          aria-controls="panel-demo"
-          className={`tab-btn${view === "demo" ? " tab-active" : ""}`}
-          onClick={() => setView("demo")}
-          onKeyDown={(e) => handleTabKeyDown(e, "demo")}
-        >
-          🖥 Stream Demo
-        </button>
-        <button
-          role="tab"
-          id="tab-dashboard"
-          aria-selected={view === "dashboard"}
-          aria-controls="panel-dashboard"
-          className={`tab-btn${view === "dashboard" ? " tab-active" : ""}`}
-          onClick={() => setView("dashboard")}
-          onKeyDown={(e) => handleTabKeyDown(e, "dashboard")}
-        >
-          💼 Employer Dashboard
-        </button>
-        <button
-          role="tab"
-          id="tab-employee"
-          aria-selected={view === "employee"}
-          aria-controls="panel-employee"
-          className={`tab-btn${view === "employee" ? " tab-active" : ""}`}
-          onClick={() => setView("employee")}
-          onKeyDown={(e) => handleTabKeyDown(e, "employee")}
-        >
-          💳 Employee Earnings
-        </button>
-        <button
-          role="tab"
-          id="tab-batch"
-          aria-selected={view === "batch"}
-          aria-controls="panel-batch"
-          className={`tab-btn${view === "batch" ? " tab-active" : ""}`}
-          onClick={() => setView("batch")}
-        >
-          📋 Batch Create
-        </button>
+        {NAV_ITEMS.map(({ v, label }) => (
+          <button
+            key={v}
+            role="tab"
+            id={`tab-${v}`}
+            aria-selected={view === v}
+            aria-controls={`panel-${v}`}
+            className={`tab-btn${view === v ? " tab-active" : ""}`}
+            onClick={() => setView(v)}
+            onKeyDown={(e) => v !== "batch" ? handleTabKeyDown(e, v as AppView) : undefined}
+          >
+            {label}
+          </button>
+        ))}
       </nav>
 
       {/* ── Batch Create panel ── */}
@@ -544,7 +607,15 @@ export default function App() {
                       tokenPrice={getPriceForToken(s.token) ?? null}
                       onWithdraw={
                         s.status === "Active" && publicKey === s.employee
-                          ? () => withdraw(s.id)
+                          ? async () => {
+                              const tid = addToast("pending", "Submitting withdrawal…");
+                              try {
+                                const hash = await withdraw(s.id);
+                                updateToast(tid, "success", "Withdrawal successful!", hash as string | undefined);
+                              } catch {
+                                updateToast(tid, "error", "Withdrawal failed.");
+                              }
+                            }
                           : undefined
                       }
                       onShowHistory={() => handleShowHistory(s.id)}
