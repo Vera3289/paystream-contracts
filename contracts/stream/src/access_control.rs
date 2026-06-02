@@ -55,6 +55,7 @@ pub const ERR_NOT_ADMIN: &str = "not the admin";
 pub const ERR_NOT_PENDING_ADMIN: &str = "not the pending admin";
 pub const ERR_NOT_EMPLOYER: &str = "not the employer";
 pub const ERR_NOT_EMPLOYEE: &str = "not the employee";
+pub const ERR_NOT_DELEGATE: &str = "not the delegate";
 
 // ---------------------------------------------------------------------------
 // Admin Role Checks
@@ -233,6 +234,7 @@ pub fn is_employee(address: &Address, stream: &Stream) -> bool {
 mod tests {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Address, Env};
+    use crate::{StreamContract};
     use crate::storage::{save_stream, set_admin, set_pending_admin, set_pending_employer};
     use crate::types::{Stream, StreamStatus};
 
@@ -253,49 +255,56 @@ mod tests {
             locked: false,
             cliff_time: 0,
             paused_at: 0,
+            delegate: None,
         }
     }
 
     #[test]
     fn test_require_admin_success() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let admin = Address::generate(&env);
-        set_admin(&env, &admin);
-
-        require_admin(&env, &admin);
-        // Should not panic
+        env.as_contract(&contract_id, || {
+            set_admin(&env, &admin);
+            require_admin(&env, &admin);
+        });
     }
 
     #[test]
     #[should_panic(expected = "not the admin")]
     fn test_require_admin_failure() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let admin = Address::generate(&env);
         let attacker = Address::generate(&env);
-        set_admin(&env, &admin);
-
-        require_admin(&env, &attacker);
+        env.as_contract(&contract_id, || {
+            set_admin(&env, &admin);
+            require_admin(&env, &attacker);
+        });
     }
 
     #[test]
     fn test_require_pending_admin_success() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let pending = Address::generate(&env);
-        set_pending_admin(&env, &pending);
-
-        require_pending_admin(&env, &pending);
-        // Should not panic
+        env.as_contract(&contract_id, || {
+            set_pending_admin(&env, &pending);
+            require_pending_admin(&env, &pending);
+        });
     }
 
     #[test]
     #[should_panic(expected = "not the pending admin")]
     fn test_require_pending_admin_failure() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let pending = Address::generate(&env);
         let attacker = Address::generate(&env);
-        set_pending_admin(&env, &pending);
-
-        require_pending_admin(&env, &attacker);
+        env.as_contract(&contract_id, || {
+            set_pending_admin(&env, &pending);
+            require_pending_admin(&env, &attacker);
+        });
     }
 
     #[test]
@@ -304,9 +313,7 @@ mod tests {
         let employer = Address::generate(&env);
         let employee = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-
         require_employer(&employer, &stream);
-        // Should not panic
     }
 
     #[test]
@@ -317,33 +324,36 @@ mod tests {
         let employee = Address::generate(&env);
         let attacker = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-
         require_employer(&attacker, &stream);
     }
 
     #[test]
     fn test_require_employer_by_id_success() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let employer = Address::generate(&env);
         let employee = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-        save_stream(&env, &stream);
-
-        let loaded = require_employer_by_id(&env, &employer, 1);
-        assert_eq!(loaded.id, 1);
+        env.as_contract(&contract_id, || {
+            save_stream(&env, &stream);
+            let loaded = require_employer_by_id(&env, &employer, 1);
+            assert_eq!(loaded.id, 1);
+        });
     }
 
     #[test]
     #[should_panic(expected = "not the employer")]
     fn test_require_employer_by_id_failure() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let employer = Address::generate(&env);
         let employee = Address::generate(&env);
         let attacker = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-        save_stream(&env, &stream);
-
-        require_employer_by_id(&env, &attacker, 1);
+        env.as_contract(&contract_id, || {
+            save_stream(&env, &stream);
+            require_employer_by_id(&env, &attacker, 1);
+        });
     }
 
     #[test]
@@ -352,9 +362,7 @@ mod tests {
         let employer = Address::generate(&env);
         let employee = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-
         require_employee(&employee, &stream);
-        // Should not panic
     }
 
     #[test]
@@ -365,65 +373,73 @@ mod tests {
         let employee = Address::generate(&env);
         let attacker = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-
         require_employee(&attacker, &stream);
     }
 
     #[test]
     fn test_require_employee_by_id_success() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let employer = Address::generate(&env);
         let employee = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-        save_stream(&env, &stream);
-
-        let loaded = require_employee_by_id(&env, &employee, 1);
-        assert_eq!(loaded.id, 1);
+        env.as_contract(&contract_id, || {
+            save_stream(&env, &stream);
+            let loaded = require_employee_by_id(&env, &employee, 1);
+            assert_eq!(loaded.id, 1);
+        });
     }
 
     #[test]
     #[should_panic(expected = "not the employee")]
     fn test_require_employee_by_id_failure() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let employer = Address::generate(&env);
         let employee = Address::generate(&env);
         let attacker = Address::generate(&env);
         let stream = create_test_stream(&env, 1, &employer, &employee);
-        save_stream(&env, &stream);
-
-        require_employee_by_id(&env, &attacker, 1);
+        env.as_contract(&contract_id, || {
+            save_stream(&env, &stream);
+            require_employee_by_id(&env, &attacker, 1);
+        });
     }
 
     #[test]
     fn test_require_pending_employer_success() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let new_employer = Address::generate(&env);
-        set_pending_employer(&env, 1, &new_employer);
-
-        require_pending_employer(&env, &new_employer, 1);
-        // Should not panic
+        env.as_contract(&contract_id, || {
+            set_pending_employer(&env, 1, &new_employer);
+            require_pending_employer(&env, &new_employer, 1);
+        });
     }
 
     #[test]
     #[should_panic(expected = "E013")]
     fn test_require_pending_employer_failure() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let new_employer = Address::generate(&env);
         let attacker = Address::generate(&env);
-        set_pending_employer(&env, 1, &new_employer);
-
-        require_pending_employer(&env, &attacker, 1);
+        env.as_contract(&contract_id, || {
+            set_pending_employer(&env, 1, &new_employer);
+            require_pending_employer(&env, &attacker, 1);
+        });
     }
 
     #[test]
     fn test_is_admin() {
         let env = Env::default();
+        let contract_id = env.register(StreamContract, ());
         let admin = Address::generate(&env);
         let other = Address::generate(&env);
-        set_admin(&env, &admin);
-
-        assert!(is_admin(&env, &admin));
-        assert!(!is_admin(&env, &other));
+        env.as_contract(&contract_id, || {
+            set_admin(&env, &admin);
+            assert!(is_admin(&env, &admin));
+            assert!(!is_admin(&env, &other));
+        });
     }
 
     #[test]
@@ -450,5 +466,31 @@ mod tests {
         assert!(is_employee(&employee, &stream));
         assert!(!is_employee(&employer, &stream));
         assert!(!is_employee(&other, &stream));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Delegate Role Checks
+// ---------------------------------------------------------------------------
+
+/// Verify that the caller is the delegate of the specified stream.
+///
+/// # Panics
+/// Panics with "not the delegate" if the caller is not the delegate.
+pub fn require_delegate(caller: &Address, stream: &Stream) {
+    assert!(is_delegate(caller, stream), "{}", ERR_NOT_DELEGATE);
+}
+
+/// Check if an address is the delegate of a specific stream.
+///
+/// This is a non-panicking version useful for conditional logic.
+///
+/// # Returns
+/// `true` if the address matches the stream's delegate, `false` otherwise.
+pub fn is_delegate(address: &Address, stream: &Stream) -> bool {
+    if let Some(delegate) = &stream.delegate {
+        *address == *delegate
+    } else {
+        false
     }
 }

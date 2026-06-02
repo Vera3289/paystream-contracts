@@ -4,9 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PayStream Demo</title>
+    <!-- Dark mode: apply theme before first paint to prevent flash of unstyled content (#223) -->
+    <script>
+      (function () {
+        var stored = localStorage.getItem("paystream-dark");
+        var dark =
+          stored !== null
+            ? stored === "true"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+      })();
+    </script>
   </head>
   <body>
-    <a href="#main-content" class="sr-only" style="position:absolute;left:-9999px">Skip to main content</a>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

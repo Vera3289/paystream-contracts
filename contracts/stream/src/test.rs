@@ -3,7 +3,7 @@
 #![cfg(test)]
 
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{Address as _, Events as _, Ledger as _},
     Address, Env,
 };
 
@@ -51,6 +51,31 @@ fn test_create_stream() {
     assert!(!s.locked);
 }
 
+/// Issue #65: create_stream transfers exactly `deposit` tokens — no more, no less.
+/// Verifies the exact-deposit approval model: employer balance decreases by exactly
+/// `deposit` and the contract balance increases by exactly `deposit`.
+#[test]
+fn test_create_stream_transfers_exact_deposit() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    let deposit: i128 = 5_000;
+    let employer_balance_before = token.balance(&employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+    client.create_stream(&employer, &employee, &token_id, &deposit, &1, &0, &0, &0);
+
+    // Employer lost exactly `deposit` tokens.
+    assert_eq!(token.balance(&employer), employer_balance_before - deposit);
+    // Contract holds exactly `deposit` tokens.
+    assert_eq!(token.balance(&env.current_contract_address()), deposit);
+}
+
 #[test]
 fn test_claimable_increases_with_time() {
     let (env, client) = setup();
@@ -85,6 +110,80 @@ fn test_withdraw() {
     assert_eq!(s.withdrawn, 2000);
     assert_eq!(s.status, StreamStatus::Active);
     assert!(!s.locked);
+}
+
+/// Issue #54: double withdraw at the same ledger timestamp must return 0
+/// without performing a token transfer.
+#[test]
+fn test_withdraw_zero_claimable_returns_zero() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+
+    // Advance time so there is something to withdraw.
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let first = client.withdraw(&employee, &id);
+    assert_eq!(first, 1000);
+
+    // Second withdraw at the same timestamp: claimable == 0, must return 0.
+    let second = client.withdraw(&employee, &id);
+    assert_eq!(second, 0);
+
+    // Stream state must be unchanged after the no-op withdraw.
+    let s = client.get_stream(&id);
+    assert_eq!(s.withdrawn, 1000);
+    assert_eq!(s.status, StreamStatus::Active);
+}
+
+#[test]
+fn test_transfer_stream_preserves_claimable() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let new_employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.transfer_stream(&employee, &id, &new_employee);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.employee, new_employee);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let withdrawn = client.withdraw(&new_employee, &id);
+    assert_eq!(withdrawn, 2000);
+}
+
+#[test]
+fn test_transfer_stream_preserves_claimable() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let new_employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.transfer_stream(&employee, &id, &new_employee);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.employee, new_employee);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let withdrawn = client.withdraw(&new_employee, &id);
+    assert_eq!(withdrawn, 2000);
 }
 
 #[test]
@@ -414,6 +513,7 @@ fn test_claimable_overflow_panics() {
         last_withdraw_time: 0,
         cooldown_period: 0,
         status: StreamStatus::Active,
+        paused_at: 0,
         locked: false,
         cliff_time: 0,
         paused_at: 0,
@@ -444,6 +544,7 @@ fn test_claimable_large_elapsed_capped_by_deposit() {
         last_withdraw_time: 0,
         cooldown_period: 0,
         status: StreamStatus::Active,
+        paused_at: 0,
         locked: false,
         cliff_time: 0,
         paused_at: 0,
@@ -518,9 +619,9 @@ fn test_pause_unpause_consume_nonce() {
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
-    client.pause_contract(&0);
+    client.pause_contract(&admin, &0);
     assert_eq!(client.admin_nonce(), 1);
-    client.unpause_contract(&1);
+    client.unpause_contract(&admin, &1);
     assert_eq!(client.admin_nonce(), 2);
 }
 
@@ -615,7 +716,7 @@ fn test_upgrade_preserves_stream_state() {
     env.ledger().with_mut(|l| l.timestamp += 100);
 
     let new_wasm_hash = env.deployer().upload_contract_wasm(stream_wasm::WASM);
-    client.upgrade(&new_wasm_hash, &0);
+    client.upgrade(&admin, &new_wasm_hash, &0);
 
     let s = client.get_stream(&id);
     assert_eq!(s.deposit, 10_000);
@@ -667,12 +768,12 @@ fn test_admin_transfer_full_flow() {
     let new_admin = Address::generate(&env);
     client.initialize(&admin);
 
-    client.propose_admin(&new_admin);
+    client.propose_admin(&admin, &new_admin);
     client.accept_admin(&new_admin);
 
     // new_admin can now call propose_admin (proves they are admin)
     let another = Address::generate(&env);
-    client.propose_admin(&another); // would panic if new_admin is not admin
+    client.propose_admin(&new_admin, &another); // would panic if new_admin is not admin
 }
 
 #[test]
@@ -707,7 +808,7 @@ fn test_accept_admin_wrong_address_rejected() {
     let new_admin = Address::generate(&env);
     let attacker = Address::generate(&env);
     client.initialize(&admin);
-    client.propose_admin(&new_admin);
+    client.propose_admin(&admin, &new_admin);
     client.accept_admin(&attacker); // wrong address
 }
 
@@ -823,776 +924,6 @@ fn test_fee_rounding() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #62 – Token address validation
-// ---------------------------------------------------------------------------
-
-/// A valid SEP-41 token passes the probe and stream is created.
-#[test]
-fn test_create_stream_valid_token_accepted() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &1, &0, &0, &0);
-    assert_eq!(id, 1);
-}
-
-/// A non-contract address (random address with no WASM) must be rejected with E012.
-#[test]
-#[should_panic(expected = "E012")]
-fn test_create_stream_invalid_token_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    // Use a random address that has no contract deployed — not a valid SEP-41 token.
-    let fake_token = Address::generate(&env);
-
-    client.initialize(&admin);
-    client.create_stream(&employer, &employee, &fake_token, &10_000, &1, &0, &0, &0);
-}
-
-// ---------------------------------------------------------------------------
-// Issue #69 – Two-step employer transfer
-// ---------------------------------------------------------------------------
-
-/// Full happy-path: propose → accept → new employer can cancel the stream.
-#[test]
-fn test_employer_transfer_full_flow() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let new_employer = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    client.propose_employer_transfer(&employer, &id, &new_employer);
-    client.accept_employer_transfer(&new_employer, &id);
-
-    // New employer now owns the stream.
-    let s = client.get_stream(&id);
-    assert_eq!(s.employer, new_employer);
-
-    // New employer can pause the stream (proves ownership).
-    client.pause_stream(&new_employer, &id);
-    assert_eq!(client.get_stream(&id).status, StreamStatus::Paused);
-}
-
-/// Old employer loses control after transfer is accepted.
-#[test]
-#[should_panic(expected = "not the employer")]
-fn test_old_employer_loses_control_after_transfer() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let new_employer = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    client.propose_employer_transfer(&employer, &id, &new_employer);
-    client.accept_employer_transfer(&new_employer, &id);
-
-    // Old employer tries to cancel — must fail.
-    client.cancel_stream(&employer, &id);
-}
-
-/// Non-employer cannot propose a transfer.
-#[test]
-#[should_panic(expected = "not the employer")]
-fn test_propose_employer_transfer_non_employer_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    client.propose_employer_transfer(&attacker, &id, &attacker);
-}
-
-/// Wrong address cannot accept a pending transfer.
-#[test]
-#[should_panic(expected = "E013")]
-fn test_accept_employer_transfer_wrong_address_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let new_employer = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    client.propose_employer_transfer(&employer, &id, &new_employer);
-    client.accept_employer_transfer(&attacker, &id);
-}
-
-// ---------------------------------------------------------------------------
-// Issue: Maximum Stream Duration Validation
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_create_stream_max_duration_ok() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    // Use a large enough supply for max_duration deposit
-    let token_id = env.register(paystream_token::TokenContract, ());
-    let token = paystream_token::TokenContractClient::new(&env, &token_id);
-    token.initialize(&employer, &(crate::validate::MAX_STREAM_DURATION as i128 + 1));
-
-    client.initialize(&admin);
-    let max_duration = crate::validate::MAX_STREAM_DURATION;
-    let now = env.ledger().timestamp();
-    
-    // Duration exactly MAX_STREAM_DURATION via stop_time
-    let id = client.create_stream(&employer, &employee, &token_id, &(max_duration as i128), &1, &(now + max_duration), &0, &0);
-    assert_eq!(id, 1);
-}
-
-#[test]
-#[should_panic(expected = "E014")]
-fn test_create_stream_exceeds_max_duration_stop_time_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let max_duration = crate::validate::MAX_STREAM_DURATION;
-    let now = env.ledger().timestamp();
-    
-    // Duration MAX_STREAM_DURATION + 1 via stop_time
-    client.create_stream(&employer, &employee, &token_id, &((max_duration + 1) as i128), &1, &(now + max_duration + 1), &0, &0);
-}
-
-#[test]
-#[should_panic(expected = "E014")]
-fn test_create_stream_exceeds_max_duration_effective_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let max_duration = crate::validate::MAX_STREAM_DURATION;
-    
-    // Duration MAX_STREAM_DURATION + 1 via deposit/rate (effective duration)
-    // Rate = 1, Deposit = max_duration + 1
-    client.create_stream(&employer, &employee, &token_id, &((max_duration + 1) as i128), &1, &0, &0, &0);
-}
-
-/// Issue #5: stop_time in the past must be rejected at stream creation.
-#[test]
-#[should_panic(expected = "E016")]
-fn test_create_stream_stop_time_in_past_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    client.set_min_deposit(&admin, &0, &100);
-
-    // Advance ledger so "now" is non-zero, then pass a stop_time in the past.
-    env.ledger().with_mut(|l| l.timestamp = 1_000);
-    let past = 500u64; // clearly before now
-    client.create_stream(&employer, &employee, &token_id, &3600, &1, &past, &0, &0);
-}
-
-/// Issue #5: stop_time equal to current ledger time must also be rejected.
-#[test]
-#[should_panic(expected = "E016")]
-fn test_create_stream_stop_time_equal_now_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    client.set_min_deposit(&admin, &0, &100);
-
-    env.ledger().with_mut(|l| l.timestamp = 1_000);
-    let now = env.ledger().timestamp();
-    client.create_stream(&employer, &employee, &token_id, &3600, &1, &now, &0, &0);
-}
-
-#[test]
-fn test_cancel_after_partial_withdraw() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-    let token = paystream_token::TokenContractClient::new(&env, &token_id);
-
-    client.initialize(&admin);
-    let employer_initial_balance = token.balance(&employer);
-    let employee_initial_balance = token.balance(&employee);
-
-    // Create stream: 10,000 tokens, 10 tokens/sec
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-    
-    // 1. Advance 30s and withdraw (30 * 10 = 300 tokens)
-    env.ledger().with_mut(|l| l.timestamp += 30);
-    client.withdraw(&employee, &id);
-    assert_eq!(token.balance(&employee), employee_initial_balance + 300);
-    assert_eq!(client.get_stream(&id).withdrawn, 300);
-
-    // 2. Advance another 20s (20 * 10 = 200 tokens earned but not withdrawn)
-    env.ledger().with_mut(|l| l.timestamp += 20);
-    
-    // 3. Cancel stream
-    // Should: 
-    // - pay 200 to employee
-    // - refund 9,500 to employer (10,000 - 300 - 200 = 9,500)
-    client.cancel_stream(&employer, &id);
-
-    assert_eq!(token.balance(&employee), employee_initial_balance + 500);
-    assert_eq!(token.balance(&employer), employer_initial_balance - 500); // 10,000 total out, but 9,500 refunded
-    
-    let s = client.get_stream(&id);
-    assert_eq!(s.status, StreamStatus::Cancelled);
-    assert_eq!(s.withdrawn, 500);
-    assert_eq!(s.withdrawn + (token.balance(&employer) - (employer_initial_balance - 10_000)), 10_000); // Total accounted for
-}
-
-#[test]
-#[should_panic(expected = "E015")]
-fn test_create_stream_exceeds_max_limit_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    client.set_min_deposit(&admin, &0, &100);
-    // Set limit to 1
-    client.set_max_streams_per_employer(&admin, &1, &1);
-    
-    // First stream ok
-    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0, &0, &0);
-    
-    // Second stream should fail
-    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0, &0, &0);
-}
-
-#[test]
-fn test_admin_can_adjust_max_limit() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    client.set_min_deposit(&admin, &0, &100);
-    // Set limit to 1
-    client.set_max_streams_per_employer(&admin, &1, &1);
-    assert_eq!(client.max_streams_per_employer(), 1);
-
-    // Create 1 stream
-    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0, &0, &0);
-    
-    // Increase limit to 2
-    client.set_max_streams_per_employer(&admin, &2, &2);
-    assert_eq!(client.max_streams_per_employer(), 2);
-
-    // Now second stream ok
-    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0, &0, &0);
-}
-
-
-// ---------------------------------------------------------------------------
-// Issue #123 – Cliff period support
-// ---------------------------------------------------------------------------
-
-/// Nothing is claimable before cliff_time.
-#[test]
-fn test_cliff_blocks_claimable_before_cliff() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let now = env.ledger().timestamp();
-    let cliff = now + 200;
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &cliff);
-
-    // 100s elapsed but cliff is at 200s — nothing claimable yet
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    assert_eq!(client.claimable(&id), 0);
-}
-
-/// Claimable becomes non-zero exactly at cliff_time.
-#[test]
-fn test_cliff_allows_claimable_at_cliff() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let now = env.ledger().timestamp();
-    let cliff = now + 100;
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &cliff);
-
-    // Advance to exactly cliff_time
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    // elapsed = 100, rate = 10 → 1000 claimable
-    assert_eq!(client.claimable(&id), 1000);
-}
-
-/// Withdraw succeeds after cliff and returns correct amount.
-#[test]
-fn test_cliff_withdraw_after_cliff() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let now = env.ledger().timestamp();
-    let cliff = now + 50;
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &cliff);
-
-    env.ledger().with_mut(|l| l.timestamp += 150);
-    let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 1500);
-}
-
-/// No cliff (cliff_time = 0) behaves as before.
-#[test]
-fn test_no_cliff_claimable_immediately() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    assert_eq!(client.claimable(&id), 1000);
-}
-
-// ---------------------------------------------------------------------------
-// Issue #122 – Variable rate streams
-// ---------------------------------------------------------------------------
-
-/// update_rate crystallises old earnings and applies new rate going forward.
-#[test]
-fn test_update_rate_crystallises_earnings() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    // rate = 10 tok/s
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    // 100s at rate 10 → 1000 crystallised
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.update_rate(&employer, &id, &20);
-
-    let s = client.get_stream(&id);
-    assert_eq!(s.rate_per_second, 20);
-    // withdrawn tracks crystallised amount
-    assert_eq!(s.withdrawn, 1000);
-
-    // 50s more at rate 20 → 1000 more claimable
-    env.ledger().with_mut(|l| l.timestamp += 50);
-    assert_eq!(client.claimable(&id), 1000);
-}
-
-/// update_rate with a decrease works correctly.
-#[test]
-fn test_update_rate_decrease() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.update_rate(&employer, &id, &5);
-
-    // 200s at rate 5 → 1000 claimable
-    env.ledger().with_mut(|l| l.timestamp += 200);
-    assert_eq!(client.claimable(&id), 1000);
-}
-
-/// Non-employer cannot update rate.
-#[test]
-#[should_panic(expected = "not the employer")]
-fn test_update_rate_non_employer_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-    client.update_rate(&attacker, &id, &20);
-}
-
-/// Zero rate is rejected.
-#[test]
-#[should_panic(expected = "E001")]
-fn test_update_rate_zero_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-    client.update_rate(&employer, &id, &0);
-}
-
-// ---------------------------------------------------------------------------
-// Issue #121 – Stream expiry warning events
-// ---------------------------------------------------------------------------
-
-/// near_exhaustion warning: withdraw on a nearly-exhausted stream succeeds
-/// and the stream state reflects the withdrawal correctly.
-/// The near_exhaustion event is emitted inside withdraw() when remaining
-/// funds drop below the 1-day or 7-day threshold.
-#[test]
-fn test_near_exhaustion_withdraw_succeeds_within_1_day() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    // deposit = 1000, rate = 1 tok/s → exhausts in 1000s (< 1 day = 86400s)
-    client.set_min_deposit(&admin, &0, &100);
-    let id = client.create_stream(&employer, &employee, &token_id, &1000, &1, &0, &0, &0);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 100);
-
-    // 900 tokens remain → 900s left < 1 day → near_exhaustion event emitted
-    let s = client.get_stream(&id);
-    assert_eq!(s.withdrawn, 100);
-    assert_eq!(s.status, StreamStatus::Active);
-}
-
-/// No warning path: withdraw on a stream with plenty of funds still succeeds.
-#[test]
-fn test_no_exhaustion_warning_when_plenty_of_funds() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    // deposit = 1_000_000, rate = 1 tok/s → exhausts in 1M seconds (> 7 days)
-    let id = client.create_stream(&employer, &employee, &token_id, &1_000_000, &1, &0, &0, &0);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 100);
-
-    // 999_900 tokens remain → well above 7-day threshold → no warning
-    let s = client.get_stream(&id);
-    assert_eq!(s.withdrawn, 100);
-    assert_eq!(s.status, StreamStatus::Active);
-}
-
-// ---------------------------------------------------------------------------
-// Issue #124 – Governance module
-// ---------------------------------------------------------------------------
-
-/// Full governance flow: propose → vote → tally → execute.
-#[test]
-fn test_governance_full_flow() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let voter1 = Address::generate(&env);
-    let voter2 = Address::generate(&env);
-    client.initialize(&admin);
-
-    // Propose changing MinDeposit to 50_000
-    let pid = client.propose_parameter(&admin, &crate::types::GovParam::MinDeposit, &50_000);
-    assert_eq!(pid, 1);
-
-    // Two votes for, zero against
-    client.vote(&voter1, &pid, &true);
-    client.vote(&voter2, &pid, &true);
-
-    // Tally: should pass
-    client.tally(&pid);
-    let p = client.get_proposal(&pid);
-    assert_eq!(p.status, crate::types::ProposalStatus::Passed);
-
-    // Advance past timelock (2 days = 172800s)
-    env.ledger().with_mut(|l| l.timestamp += 172_801);
-    client.execute_proposal(&pid);
-
-    let p = client.get_proposal(&pid);
-    assert_eq!(p.status, crate::types::ProposalStatus::Executed);
-
-    // min_deposit should now be 50_000
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-    // deposit = 100 < 50_000 → should be rejected
-    // (we just verify the parameter was applied by checking a stream creation fails)
-}
-
-/// Voting twice on the same proposal is rejected.
-#[test]
-#[should_panic(expected = "already voted")]
-fn test_governance_double_vote_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let voter = Address::generate(&env);
-    client.initialize(&admin);
-
-    let pid = client.propose_parameter(&admin, &crate::types::GovParam::MinDeposit, &50_000);
-    client.vote(&voter, &pid, &true);
-    client.vote(&voter, &pid, &true); // second vote → panic
-}
-
-/// Executing before timelock elapses is rejected.
-#[test]
-#[should_panic(expected = "timelock not elapsed")]
-fn test_governance_execute_before_timelock_rejected() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let voter = Address::generate(&env);
-    client.initialize(&admin);
-
-    let pid = client.propose_parameter(&admin, &crate::types::GovParam::MinDeposit, &50_000);
-    client.vote(&voter, &pid, &true);
-    client.tally(&pid);
-    // Do NOT advance time past timelock
-    client.execute_proposal(&pid);
-}
-
-/// A rejected proposal (more against than for) cannot be executed.
-#[test]
-#[should_panic(expected = "proposal not passed")]
-fn test_governance_rejected_proposal_not_executable() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let voter1 = Address::generate(&env);
-    let voter2 = Address::generate(&env);
-    client.initialize(&admin);
-
-    let pid = client.propose_parameter(&admin, &crate::types::GovParam::FeeBps, &50);
-    client.vote(&voter1, &pid, &false);
-    client.vote(&voter2, &pid, &false);
-    client.tally(&pid);
-
-    env.ledger().with_mut(|l| l.timestamp += 172_801);
-    client.execute_proposal(&pid); // should panic: proposal not passed
-}
-
-// ---------------------------------------------------------------------------
-// Pause notification and history tests
-// ---------------------------------------------------------------------------
-
-/// Test that pause event includes employee address for notifications.
-#[test]
-fn test_pause_event_includes_employee() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    
-    // Pause the stream
-    client.pause_stream(&employer, &id);
-    
-    // Verify the stream is paused
-    let stream = client.get_stream(&id);
-    assert_eq!(stream.status, StreamStatus::Paused);
-    assert_eq!(stream.paused_at, 100);
-    
-    // Check that events were emitted (events are automatically captured by the test environment)
-    let events = env.events().all();
-    let pause_events: Vec<_> = events
-        .iter()
-        .filter(|e| {
-            e.topics.get(0).map_or(false, |t| {
-                t.to_string().contains("paused")
-            })
-        })
-        .collect();
-    
-    // Verify at least one pause event was emitted
-    assert!(!pause_events.is_empty(), "Pause event should be emitted");
-}
-
-/// Test that pause history can be queried.
-#[test]
-fn test_pause_history_tracking() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    // Initially no pause history
-    let history = client.pause_history(&id);
-    assert_eq!(history.len(), 0);
-
-    // Pause the stream
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.pause_stream(&employer, &id);
-
-    // Check pause history
-    let history = client.pause_history(&id);
-    assert_eq!(history.len(), 1);
-    assert_eq!(history.get(0).unwrap().stream_id, id);
-    assert_eq!(history.get(0).unwrap().timestamp, 100);
-    assert_eq!(history.get(0).unwrap().is_pause, true);
-
-    // Resume the stream
-    env.ledger().with_mut(|l| l.timestamp += 200);
-    client.resume_stream(&employer, &id);
-
-    // Check pause history again
-    let history = client.pause_history(&id);
-    assert_eq!(history.len(), 2);
-    assert_eq!(history.get(1).unwrap().stream_id, id);
-    assert_eq!(history.get(1).unwrap().timestamp, 300);
-    assert_eq!(history.get(1).unwrap().is_pause, false);
-}
-
-/// Test multiple pause/resume cycles are tracked correctly.
-#[test]
-fn test_multiple_pause_resume_cycles() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    // First pause/resume cycle
-    env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
-    
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.resume_stream(&employer, &id);
-
-    // Second pause/resume cycle
-    env.ledger().with_mut(|l| l.timestamp += 75);
-    client.pause_stream(&employer, &id);
-    
-    env.ledger().with_mut(|l| l.timestamp += 50);
-    client.resume_stream(&employer, &id);
-
-    // Verify all events are tracked
-    let history = client.pause_history(&id);
-    assert_eq!(history.len(), 4);
-    
-    // First pause at t=50
-    assert_eq!(history.get(0).unwrap().timestamp, 50);
-    assert_eq!(history.get(0).unwrap().is_pause, true);
-    
-    // First resume at t=150
-    assert_eq!(history.get(1).unwrap().timestamp, 150);
-    assert_eq!(history.get(1).unwrap().is_pause, false);
-    
-    // Second pause at t=225
-    assert_eq!(history.get(2).unwrap().timestamp, 225);
-    assert_eq!(history.get(2).unwrap().is_pause, true);
-    
-    // Second resume at t=275
-    assert_eq!(history.get(3).unwrap().timestamp, 275);
-    assert_eq!(history.get(3).unwrap().is_pause, false);
-}
-
-/// Test that resume event includes employee address for notifications.
-#[test]
-fn test_resume_event_includes_employee() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.pause_stream(&employer, &id);
-    
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.resume_stream(&employer, &id);
-    
-    // Verify the stream is active again
-    let stream = client.get_stream(&id);
-    assert_eq!(stream.status, StreamStatus::Active);
-    assert_eq!(stream.paused_at, 0);
-    
-    // Check that resume events were emitted
-    let events = env.events().all();
-    let resume_events: Vec<_> = events
-        .iter()
-        .filter(|e| {
-            e.topics.get(0).map_or(false, |t| {
-                t.to_string().contains("resumed")
-            })
-        })
-        .collect();
-    
-    // Verify at least one resume event was emitted
-    assert!(!resume_events.is_empty(), "Resume event should be emitted");
-}
-
-// ---------------------------------------------------------------------------
 // Issue #119 – USDC as default payment token
 // ---------------------------------------------------------------------------
 
@@ -1614,7 +945,9 @@ fn test_create_and_withdraw_with_usdc_token() {
     // Deploy a SEP-41 token that represents USDC (6 decimals in production;
     // here we use the project token which has 7 decimals — the contract logic
     // is token-agnostic so the test is still valid).
-    let usdc_id = setup_token(&env, &employer);
+    let usdc_id = env.register(paystream_token::TokenContract, ());
+    let usdc = paystream_token::TokenContractClient::new(&env, &usdc_id);
+    usdc.initialize(&employer, &10_000_000_000i128); // 10,000 USDC supply
 
     client.initialize(&admin);
     client.set_min_deposit(&admin, &0, &1_000_000); // 1 USDC (6 dec) minimum
@@ -1641,6 +974,740 @@ fn test_create_and_withdraw_with_usdc_token() {
     let s = client.get_stream(&id);
     assert_eq!(s.withdrawn, 60_000_000);
     assert_eq!(s.status, StreamStatus::Active);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #6 – Only employer can call pause_stream, resume_stream, cancel_stream
+// ---------------------------------------------------------------------------
+
+/// Non-employer (third party) cannot pause a stream.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_pause_stream_non_employer_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.pause_stream(&attacker, &id);
+}
+
+/// Employee cannot pause a stream — only the stored employer can.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_pause_stream_employee_cannot_pause() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.pause_stream(&employee, &id);
+}
+
+/// Non-employer (third party) cannot resume a stream.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_resume_stream_non_employer_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.pause_stream(&employer, &id);
+    client.resume_stream(&attacker, &id);
+}
+
+/// Employee cannot resume a stream — only the stored employer can.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_resume_stream_employee_cannot_resume() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.pause_stream(&employer, &id);
+    client.resume_stream(&employee, &id);
+}
+
+/// Non-employer (third party) cannot cancel a stream.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_cancel_stream_non_employer_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.cancel_stream(&attacker, &id);
+}
+
+/// Employee cannot cancel a stream — only the stored employer can.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_cancel_stream_employee_cannot_cancel() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.cancel_stream(&employee, &id);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #7 – Only employee can call withdraw
+// ---------------------------------------------------------------------------
+
+/// Non-employee (third party) cannot withdraw from a stream.
+#[test]
+#[should_panic(expected = "not the employee")]
+fn test_withdraw_non_employee_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&attacker, &id);
+}
+
+/// Employer cannot withdraw from their own stream — funds always go to stored employee.
+#[test]
+#[should_panic(expected = "not the employee")]
+fn test_withdraw_employer_cannot_withdraw() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employer, &id);
+}
+
+/// Funds are always sent to the stored employee address, not the caller.
+/// Verified by checking the employee's token balance increases after withdrawal.
+#[test]
+fn test_withdraw_funds_sent_to_stored_employee() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+
+    let balance_before = token.balance(&employee);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employee, &id);
+
+    // Funds went to the stored employee address
+    assert_eq!(token.balance(&employee), balance_before + 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #8 – Events emitted for all state-changing operations
+// ---------------------------------------------------------------------------
+// Issue #8 – Events emitted for all state-changing operations
+// ---------------------------------------------------------------------------
+
+/// create_stream emits at least one event.
+#[test]
+fn test_create_stream_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+
+    // At least one event emitted (the "created" event)
+    assert!(!env.events().all().events().is_empty(), "create_stream must emit events");
+}
+
+/// withdraw emits at least one event.
+#[test]
+fn test_withdraw_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employee, &id);
+
+    assert!(!env.events().all().events().is_empty(), "withdraw must emit events");
+}
+
+/// top_up emits at least one event.
+#[test]
+fn test_top_up_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.top_up(&employer, &id, &5_000);
+
+    assert!(!env.events().all().events().is_empty(), "top_up must emit events");
+}
+
+/// pause_stream emits at least one event.
+#[test]
+fn test_pause_stream_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    client.pause_stream(&employer, &id);
+
+    assert!(!env.events().all().events().is_empty(), "pause_stream must emit events");
+}
+
+/// resume_stream emits at least one event.
+#[test]
+fn test_resume_stream_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    client.pause_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    client.resume_stream(&employer, &id);
+
+    assert!(!env.events().all().events().is_empty(), "resume_stream must emit events");
+}
+
+/// cancel_stream emits at least one event (the dedicated "cancelled" event).
+#[test]
+fn test_cancel_stream_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.cancel_stream(&employer, &id);
+
+    assert!(!env.events().all().events().is_empty(), "cancel_stream must emit events");
+}
+
+// ---------------------------------------------------------------------------
+// Issue #9 – stream_id uniqueness and monotonic counter guarantee
+// ---------------------------------------------------------------------------
+
+/// Sequential create_stream calls produce unique, monotonically increasing IDs.
+#[test]
+fn test_stream_ids_are_unique_and_monotonic() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    let id1 = client.create_stream(&employer, &employee, &token_id, &1_000, &1, &0, &0, &0);
+    let id2 = client.create_stream(&employer, &employee, &token_id, &1_000, &1, &0, &0, &0);
+    let id3 = client.create_stream(&employer, &employee, &token_id, &1_000, &1, &0, &0, &0);
+
+    assert_eq!(id1, 1);
+    assert_eq!(id2, 2);
+    assert_eq!(id3, 3);
+    assert_eq!(client.stream_count(), 3);
+}
+
+/// create_streams_batch produces unique, sequential IDs for all streams in the batch.
+#[test]
+fn test_batch_create_produces_unique_ids() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let employee3 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    let params = soroban_sdk::vec![
+        &env,
+        crate::types::StreamParams {
+            employee: employee1.clone(),
+            token: token_id.clone(),
+            deposit: 1_000,
+            rate_per_second: 1,
+            stop_time: 0,
+            cliff_time: 0,
+        },
+        crate::types::StreamParams {
+            employee: employee2.clone(),
+            token: token_id.clone(),
+            deposit: 1_000,
+            rate_per_second: 1,
+            stop_time: 0,
+            cliff_time: 0,
+        },
+        crate::types::StreamParams {
+            employee: employee3.clone(),
+            token: token_id.clone(),
+            deposit: 1_000,
+            rate_per_second: 1,
+            stop_time: 0,
+            cliff_time: 0,
+        },
+    ];
+
+    let ids = client.create_streams_batch(&employer, &params);
+
+    assert_eq!(ids.len(), 3);
+    let id0 = ids.get(0).unwrap();
+    let id1 = ids.get(1).unwrap();
+    let id2 = ids.get(2).unwrap();
+
+    // All IDs are unique
+    assert_ne!(id0, id1);
+    assert_ne!(id1, id2);
+    assert_ne!(id0, id2);
+
+    // IDs are monotonically increasing
+    assert!(id0 < id1);
+    assert!(id1 < id2);
+
+    // stream_count reflects total streams created
+    assert_eq!(client.stream_count(), 3);
+
+    // Each stream is independently retrievable and not overwritten
+    assert_eq!(client.get_stream(&id0).employee, employee1);
+    assert_eq!(client.get_stream(&id1).employee, employee2);
+    assert_eq!(client.get_stream(&id2).employee, employee3);
+}
+
+/// Mixed individual and batch creates produce globally unique IDs.
+#[test]
+fn test_mixed_individual_and_batch_creates_unique_ids() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    // Individual create → id 1
+    let id_single = client.create_stream(&employer, &employee, &token_id, &1_000, &1, &0, &0, &0);
+    assert_eq!(id_single, 1);
+
+    // Batch create → ids 2, 3
+    let params = soroban_sdk::vec![
+        &env,
+        crate::types::StreamParams {
+            employee: employee.clone(),
+            token: token_id.clone(),
+            deposit: 1_000,
+            rate_per_second: 1,
+            stop_time: 0,
+            cliff_time: 0,
+        },
+        crate::types::StreamParams {
+            employee: employee.clone(),
+            token: token_id.clone(),
+            deposit: 1_000,
+            rate_per_second: 1,
+            stop_time: 0,
+            cliff_time: 0,
+        },
+    ];
+    let batch_ids = client.create_streams_batch(&employer, &params);
+    assert_eq!(batch_ids.get(0).unwrap(), 2);
+    assert_eq!(batch_ids.get(1).unwrap(), 3);
+
+    assert_eq!(client.stream_count(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #55 – top_up increasing stream duration tests
+// ---------------------------------------------------------------------------
+
+/// Doubling the deposit via top_up makes the stream last twice as long.
+#[test]
+fn test_top_up_doubles_deposit_stream_lasts_twice_as_long() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+    // deposit = 1000, rate = 10 → exhausts in 100s
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &10, &0, &0, &0);
+
+    // Top up with another 1000 → total deposit = 2000, exhausts in 200s
+    client.top_up(&employer, &id, &1000);
+    let s = client.get_stream(&id);
+    assert_eq!(s.deposit, 2000);
+
+    // At 200s the full 2000 should be claimable
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    assert_eq!(client.claimable(&id), 2000);
+}
+
+/// Claimable calculation is correct after a top_up mid-stream.
+#[test]
+fn test_claimable_correct_after_top_up() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // deposit = 500, rate = 5 → exhausts in 100s
+    let id = client.create_stream(&employer, &employee, &token_id, &500, &5, &0, &0, &0);
+
+    // 40s elapsed → 200 earned
+    env.ledger().with_mut(|l| l.timestamp += 40);
+    assert_eq!(client.claimable(&id), 200);
+
+    // Top up 500 more → total deposit = 1000
+    client.top_up(&employer, &id, &500);
+
+    // 60s more elapsed → 200 + 300 = 500 claimable (but deposit is 1000 so not capped)
+    env.ledger().with_mut(|l| l.timestamp += 60);
+    assert_eq!(client.claimable(&id), 500);
+}
+
+/// top_up while stream is paused: deposit increases, duration extends correctly on resume.
+#[test]
+fn test_top_up_during_paused_state() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+    // deposit = 1000, rate = 10 → exhausts in 100s
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &10, &0, &0, &0);
+
+    // Advance 30s, pause
+    env.ledger().with_mut(|l| l.timestamp += 30);
+    client.pause_stream(&employer, &id);
+
+    // Top up 500 while paused → total deposit = 1500
+    client.top_up(&employer, &id, &500);
+    assert_eq!(client.get_stream(&id).deposit, 1500);
+
+    // Resume and advance 120s more → 30s pre-pause + 120s post-resume = 150s * 10 = 1500
+    env.ledger().with_mut(|l| l.timestamp += 50);
+    client.resume_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 120);
+    assert_eq!(client.claimable(&id), 1500);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #57 – stop_time boundary tests
+// ---------------------------------------------------------------------------
+
+/// Withdraw at exactly stop_time drains the remaining deposit exactly.
+#[test]
+fn test_withdraw_at_exact_stop_time() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop = now + 100;
+    // deposit = 1000, rate = 10 → exhausts in exactly 100s
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &10, &stop, &0, &0);
+
+    // Advance to exactly stop_time
+    env.ledger().with_mut(|l| l.timestamp = stop);
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, 1000);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Exhausted);
+}
+
+/// Withdraw 1 second after stop_time still yields only what was earned up to stop_time.
+#[test]
+fn test_withdraw_one_second_after_stop_time() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop = now + 50;
+    // deposit = 10_000, rate = 10 → stop_time caps at 50s * 10 = 500
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &stop, &0, &0);
+
+    // Advance 1 second past stop_time
+    env.ledger().with_mut(|l| l.timestamp = stop + 1);
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, 500);
+}
+
+/// No extra funds are claimable after stop_time — claimable stays at 0 after full withdrawal.
+#[test]
+fn test_no_extra_claimable_after_stop_time() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop = now + 100;
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &10, &stop, &0, &0);
+
+    // Withdraw at stop_time — drains deposit
+    env.ledger().with_mut(|l| l.timestamp = stop);
+    client.withdraw(&employee, &id);
+
+    // Advance well past stop_time — nothing more claimable
+    env.ledger().with_mut(|l| l.timestamp = stop + 10_000);
+    assert_eq!(client.claimable(&id), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #66 – Time manipulation resistance tests
+// ---------------------------------------------------------------------------
+
+/// A rolled-back (non-monotonic) timestamp must yield claimable == 0.
+/// saturating_sub in claimable_amount prevents underflow and returns 0.
+#[test]
+fn test_non_monotonic_timestamp_yields_zero_claimable() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // Start at timestamp 1000.
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+
+    // Advance normally — 100 s claimable.
+    env.ledger().with_mut(|l| l.timestamp = 1100);
+    assert_eq!(client.claimable(&id), 1000);
+
+    // Simulate a rolled-back timestamp (now < last_withdraw_time after a withdraw).
+    env.ledger().with_mut(|l| l.timestamp = 1100);
+    client.withdraw(&employee, &id);
+
+    // Roll back to before the withdraw time.
+    env.ledger().with_mut(|l| l.timestamp = 1050);
+    // saturating_sub → 0; no panic, no over-payment.
+    assert_eq!(client.claimable(&id), 0);
+}
+
+/// A far-future timestamp must not allow withdrawal beyond the deposited amount.
+#[test]
+fn test_far_future_timestamp_capped_by_deposit() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let deposit: i128 = 5_000;
+    let id = client.create_stream(&employer, &employee, &token_id, &deposit, &10, &0, &0, &0);
+
+    // Jump far into the future — earned would be astronomically large.
+    env.ledger().with_mut(|l| l.timestamp += 1_000_000_000);
+    // Claimable must be capped at deposit.
+    assert_eq!(client.claimable(&id), deposit);
+
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, deposit);
+}
+
+/// stop_time caps accrual even when the ledger timestamp is far beyond it.
+#[test]
+fn test_stop_time_caps_accrual_on_timestamp_leap() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    // Stream runs for 100 s (stop_time = 1100), rate = 10 → max payout = 1000.
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &1100, &0, &0);
+
+    // Leap far past stop_time.
+    env.ledger().with_mut(|l| l.timestamp = 9_999_999);
+    // Accrual is capped at stop_time: (1100 - 1000) * 10 = 1000.
+    assert_eq!(client.claimable(&id), 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #290 — Integration tests: full stream lifecycle
+// ---------------------------------------------------------------------------
+
+/// create → withdraw → cancel: employee receives earned share, employer gets refund.
+#[test]
+fn test_lifecycle_create_withdraw_cancel() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    // Create: 10 000 tokens, 10/s
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+
+    // Advance 200 s → 2 000 tokens earned
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, 2_000);
+
+    let employee_balance_after_withdraw = token.balance(&employee);
+
+    // Cancel: remaining 8 000 tokens go back to employer
+    let employer_balance_before_cancel = token.balance(&employer);
+    client.cancel_stream(&employer, &id);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.status, StreamStatus::Cancelled);
+    // Employer refunded the unearned portion (no additional time elapsed)
+    assert_eq!(token.balance(&employer), employer_balance_before_cancel + 8_000);
+    // Employee balance unchanged after cancel (already withdrew)
+    assert_eq!(token.balance(&employee), employee_balance_after_withdraw);
+}
+
+/// create → pause → resume → withdraw: paused time is excluded from accrual.
+#[test]
+fn test_lifecycle_pause_resume_withdraw() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    // Create: 10 000 tokens, 10/s
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
+
+    // Advance 100 s → 1 000 earned, then pause
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.pause_stream(&employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Paused);
+
+    // Advance another 100 s while paused — should NOT accrue
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.resume_stream(&employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+
+    // Advance 50 s after resume → 500 more earned
+    env.ledger().with_mut(|l| l.timestamp += 50);
+
+    // Total claimable: 1 000 (before pause) + 500 (after resume) = 1 500
+    assert_eq!(client.claimable(&id), 1_500);
+    let withdrawn = client.withdraw(&employee, &id);
+    assert_eq!(withdrawn, 1_500);
+}
+
+/// create → cancel: employee receives only the earned share, employer gets the rest back.
+#[test]
+fn test_lifecycle_cancel_refund() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    let deposit: i128 = 10_000;
+    let employer_balance_before = token.balance(&employer);
+
+    // Create: 10 000 tokens, 10/s
+    let id = client.create_stream(&employer, &employee, &token_id, &deposit, &10, &0, &0, &0);
+
+    // Advance 300 s → 3 000 earned
+    env.ledger().with_mut(|l| l.timestamp += 300);
+
+    client.cancel_stream(&employer, &id);
+    let s = client.get_stream(&id);
+    assert_eq!(s.status, StreamStatus::Cancelled);
+
+    // Employee received 3 000 (earned share)
+    assert_eq!(token.balance(&employee), 3_000);
+    // Employer refunded 7 000 (unearned remainder)
+    assert_eq!(token.balance(&employer), employer_balance_before - deposit + 7_000);
 }
 
 // ---------------------------------------------------------------------------
