@@ -18,6 +18,17 @@ function formatRate(stroopsPerSec: bigint): string {
   return `${stroopsPerSec.toString()} stroops/s`;
 }
 
+function formatFiat(amount: number, price: number, currency: string): string {
+  const value = amount * price;
+  return `${currency.toUpperCase()} ${value.toFixed(2)}`;
+}
+
+function maybeFiatSublabel(amount: bigint, tokenPrice?: number | null, fiatCurrency?: string): string | undefined {
+  if (!tokenPrice || !fiatCurrency) return undefined;
+  const tokenAmount = Number(amount) / 10_000_000;
+  return `≈ ${formatFiat(tokenAmount, tokenPrice, fiatCurrency)}`;
+}
+
 function formatTs(ts: bigint): string {
   if (ts === 0n) return "Indefinite";
   return new Date(Number(ts) * 1000).toLocaleString();
@@ -25,6 +36,18 @@ function formatTs(ts: bigint): string {
 
 function isoTs(ts: bigint): string {
   return new Date(Number(ts) * 1000).toISOString();
+}
+
+// ─── Explorer URL helpers ────────────────────────────────────────────────────
+
+const EXPLORER_BASE = "https://stellar.expert/explorer/testnet";
+
+function explorerAccountUrl(address: string): string {
+  return `${EXPLORER_BASE}/account/${address}`;
+}
+
+function explorerTxUrl(hash: string): string {
+  return `${EXPLORER_BASE}/tx/${hash}`;
 }
 
 // ─── ExplorerLink (#239) ──────────────────────────────────────────────────────
@@ -91,6 +114,12 @@ export interface StreamStatusCardProps {
   stream: Stream;
   /** Live claimable amount in stroops, updated by polling. */
   claimable?: bigint;
+  /** Optional token symbol to render next to amounts. */
+  tokenSymbol?: string;
+  /** Optional fiat currency code for the current user's preference. */
+  fiatCurrency?: string;
+  /** Optional fiat price per token unit. */
+  tokenPrice?: number | null;
 
   // ── Action callbacks (all optional — omit what's not relevant) ──
   /** Employee: withdraw all claimable tokens. */
@@ -140,6 +169,9 @@ export interface StreamStatusCardProps {
 export function StreamStatusCard({
   stream,
   claimable = 0n,
+  tokenSymbol,
+  fiatCurrency,
+  tokenPrice,
   onWithdraw,
   onPause,
   onResume,
@@ -153,6 +185,9 @@ export function StreamStatusCard({
   children,
 }: StreamStatusCardProps) {
   const key = stream.id.toString();
+
+  // Use the balance ticker hook for live-updating claimable balance
+  const liveClaimable = useBalanceTicker(stream, claimable);
 
   // Derived values
   const locked =
@@ -179,11 +214,9 @@ export function StreamStatusCard({
   const showCsv      = !!onExportCsv;
   const hasActions   = showWithdraw || showPause || showResume || showCancel || showTopUp || showHistory || showCsv;
 
-  const handleCancel = () => {
-    if (window.confirm(`Cancel stream #${key}? This cannot be undone.`)) {
-      onCancel!();
-    }
-  };
+  // onCancel is called directly; the parent is responsible for showing a
+  // confirmation modal (CancelConfirmModal) before invoking this callback.
+  const handleCancel = () => onCancel!();
 
   return (
     <article
@@ -230,15 +263,17 @@ export function StreamStatusCard({
         />
         <MetricItem
           label="Total Deposit"
-          value={`${formatXlm(stream.deposit)} XLM`}
+          value={`${formatXlm(stream.deposit)} ${tokenSymbol ?? "XLM"}`}
+          sublabel={maybeFiatSublabel(stream.deposit, tokenPrice, fiatCurrency)}
         />
         <MetricItem
           label="Withdrawn"
-          value={`${formatXlm(stream.withdrawn)} XLM`}
+          value={`${formatXlm(stream.withdrawn)} ${tokenSymbol ?? "XLM"}`}
+          sublabel={maybeFiatSublabel(stream.withdrawn, tokenPrice, fiatCurrency)}
         />
         <MetricItem
           label="Claimable Now"
-          value={`${formatXlm(claimable)} XLM`}
+          value={`${formatXlm(liveClaimable)} XLM`}
           highlight
           live={stream.status === "Active"}
         />
