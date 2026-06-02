@@ -1709,3 +1709,111 @@ fn test_lifecycle_cancel_refund() {
     // Employer refunded 7 000 (unearned remainder)
     assert_eq!(token.balance(&employer), employer_balance_before - deposit + 7_000);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #330 – Unit tests for batch stream creation
+// ---------------------------------------------------------------------------
+
+/// All streams in a batch are created successfully and IDs are returned.
+#[test]
+fn test_batch_all_streams_created_and_ids_returned() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let employee3 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+
+    let params = soroban_sdk::vec![
+        &env,
+        crate::types::StreamParams { employee: employee1.clone(), token: token_id.clone(), deposit: 1_000, rate_per_second: 1, stop_time: 0, cliff_time: 0 },
+        crate::types::StreamParams { employee: employee2.clone(), token: token_id.clone(), deposit: 2_000, rate_per_second: 2, stop_time: 0, cliff_time: 0 },
+        crate::types::StreamParams { employee: employee3.clone(), token: token_id.clone(), deposit: 3_000, rate_per_second: 3, stop_time: 0, cliff_time: 0 },
+    ];
+
+    let ids = client.create_streams_batch(&employer, &params);
+
+    assert_eq!(ids.len(), 3);
+    assert_eq!(client.stream_count(), 3);
+    assert_eq!(client.get_stream(&ids.get(0).unwrap()).employee, employee1);
+    assert_eq!(client.get_stream(&ids.get(1).unwrap()).employee, employee2);
+    assert_eq!(client.get_stream(&ids.get(2).unwrap()).employee, employee3);
+}
+
+/// Correct total deposit is deducted from the employer's token balance.
+#[test]
+fn test_batch_correct_total_deposit_deducted() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+
+    client.initialize(&admin);
+    let balance_before = token.balance(&employer);
+
+    let params = soroban_sdk::vec![
+        &env,
+        crate::types::StreamParams { employee: employee1.clone(), token: token_id.clone(), deposit: 4_000, rate_per_second: 1, stop_time: 0, cliff_time: 0 },
+        crate::types::StreamParams { employee: employee2.clone(), token: token_id.clone(), deposit: 6_000, rate_per_second: 1, stop_time: 0, cliff_time: 0 },
+    ];
+
+    client.create_streams_batch(&employer, &params);
+
+    // Total deducted = 4_000 + 6_000 = 10_000
+    assert_eq!(token.balance(&employer), balance_before - 10_000);
+}
+
+/// A batch with one invalid stream (zero rate) reverts the entire batch.
+#[test]
+#[should_panic(expected = "E001")]
+fn test_batch_one_invalid_stream_reverts_entire_batch() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+
+    let params = soroban_sdk::vec![
+        &env,
+        crate::types::StreamParams { employee: employee1.clone(), token: token_id.clone(), deposit: 1_000, rate_per_second: 1, stop_time: 0, cliff_time: 0 },
+        // Invalid: rate_per_second = 0 → E001
+        crate::types::StreamParams { employee: employee2.clone(), token: token_id.clone(), deposit: 1_000, rate_per_second: 0, stop_time: 0, cliff_time: 0 },
+    ];
+
+    client.create_streams_batch(&employer, &params);
+}
+
+/// After a failed batch, no streams are created (atomicity).
+#[test]
+fn test_batch_failed_batch_creates_no_streams() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+
+    let params = soroban_sdk::vec![
+        &env,
+        crate::types::StreamParams { employee: employee1.clone(), token: token_id.clone(), deposit: 1_000, rate_per_second: 1, stop_time: 0, cliff_time: 0 },
+        crate::types::StreamParams { employee: employee2.clone(), token: token_id.clone(), deposit: 1_000, rate_per_second: 0, stop_time: 0, cliff_time: 0 },
+    ];
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.create_streams_batch(&employer, &params);
+    }));
+
+    assert!(result.is_err());
+    assert_eq!(client.stream_count(), 0);
+}
