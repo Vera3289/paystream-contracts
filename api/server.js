@@ -8,6 +8,7 @@ const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 require('dotenv').config();
 
+const compression = require('compression');
 const correlationId = require('./middleware/correlationId');
 const { loadSecrets } = require('./services/secretsService');
 const { closePool } = require('./services/dbService');
@@ -63,6 +64,54 @@ app.use(cors(corsOptions));
 
 // Admin UI for queues
 app.use('/admin/queues', serverAdapter.getRouter());
+
+// Response compression (gzip/brotli) for responses > 1KB
+app.use(compression({
+  threshold: 1024,
+  filter: (req, res) => {
+    // Skip already-compressed content types
+    const contentType = res.getHeader('Content-Type') || '';
+    if (/image|audio|video|zip|gzip|br|compress/.test(contentType)) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+}));
+
+// Log compression ratio when response is compressed
+app.use((req, res, next) => {
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+  let originalSize = 0;
+
+  res.write = (chunk, ...args) => {
+    if (chunk) originalSize += Buffer.byteLength(chunk);
+    return originalWrite(chunk, ...args);
+  };
+
+  res.end = (chunk, ...args) => {
+    if (chunk) originalSize += Buffer.byteLength(chunk);
+    const encoding = res.getHeader('Content-Encoding');
+    if (encoding && originalSize > 0) {
+      const compressedSize = parseInt(res.getHeader('Content-Length') || '0', 10);
+      if (compressedSize > 0) {
+        const ratio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
+        console.log(`[compression] ${req.method} ${req.path} encoding=${encoding} original=${originalSize}B compressed=${compressedSize}B ratio=${ratio}%`);
+        // Record in metrics (as a percent value)
+        try {
+          metricsService.observeCompressionRatio(parseFloat(ratio), { encoding, method: req.method, path: req.path });
+          metricsService.incrementCompressed({ encoding, method: req.method, path: req.path });
+        } catch (err) {
+          // don't break response flow for metrics failures
+          console.error('[metrics] failed to record compression metric', err && err.message ? err.message : err);
+        }
+      }
+    }
+    return originalEnd(chunk, ...args);
+  };
+
+  next();
+});
 
 // Rate limiting
 const limiter = rateLimit({
@@ -236,6 +285,9 @@ app.get('/docs/openapi.yaml', (req, res) => {
   res.setHeader('Content-Type', 'text/yaml');
   res.send(YAML.stringify(specs));
 });
+
+// Metrics endpoint for Prometheus scraping
+app.get('/metrics', metricsService.metricsEndpoint);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
