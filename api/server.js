@@ -260,6 +260,41 @@ app.get('/ready', async (req, res) => {
   }
 });
 
+// --- Soroban contract stub routes ---
+// Standardized response: { success, data, error }
+
+function sorobanStub(method, params) {
+  return { method, params, txHash: '0x' + Math.random().toString(16).slice(2, 18), network: 'testnet' };
+}
+
+app.post('/streams', (req, res) => {
+  try {
+    const data = sorobanStub('create_stream', req.body);
+    res.status(201).json({ success: true, data, error: null });
+  } catch (err) {
+    res.status(500).json({ success: false, data: null, error: err.message });
+  }
+});
+
+app.get('/streams/:id', (req, res) => {
+  try {
+    const data = sorobanStub('get_stream', { id: req.params.id });
+    data.state = { id: req.params.id, status: 'active', streamed: '0', remaining: '1000' };
+    res.json({ success: true, data, error: null });
+  } catch (err) {
+    res.status(500).json({ success: false, data: null, error: err.message });
+  }
+});
+
+app.post('/streams/:id/withdraw', (req, res) => {
+  try {
+    const data = sorobanStub('withdraw', { id: req.params.id, ...req.body });
+    res.json({ success: true, data, error: null });
+  } catch (err) {
+    res.status(500).json({ success: false, data: null, error: err.message });
+  }
+});
+
 // Auth routes (public — no authMiddleware)
 app.use('/auth', authRoutes);
 
