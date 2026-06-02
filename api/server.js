@@ -14,13 +14,14 @@ const { loadSecrets } = require('./services/secretsService');
 const { closePool } = require('./services/dbService');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
+const { versionHeader, deprecationWarning } = require('./middleware/versioning');
 const authRoutes = require('./routes/auth');
 const streamRoutes = require('./routes/streams');
 const tokenRoutes = require('./routes/tokens');
 const adminRoutes = require('./routes/admin');
 const governanceRoutes = require('./routes/governance');
 const userRoutes = require('./routes/users');
-const metricsService = require('./services/metricsService');
+const webhookRoutes = require('./routes/webhooks');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,7 +37,33 @@ if (process.env.NODE_ENV !== 'test') {
 
 // Security middleware
 app.use(helmet());
-app.use(cors());
+
+// CORS configuration
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:3000', 'http://localhost:5173']; // Default dev origins
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+
+// Admin UI for queues
+app.use('/admin/queues', serverAdapter.getRouter());
 
 // Response compression (gzip/brotli) for responses > 1KB
 app.use(compression({
@@ -106,6 +133,9 @@ if (process.env.NODE_ENV !== 'test') {
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Version header on all responses
+app.use(versionHeader);
 
 // Swagger configuration
 const swaggerOptions = {
@@ -191,6 +221,44 @@ const swaggerOptions = {
             },
           },
         },
+        ValidationError: {
+          type: 'object',
+          properties: {
+            error: {
+              type: 'string',
+              example: 'Validation failed',
+            },
+            details: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  msg: { type: 'string' },
+                  param: { type: 'string' },
+                  location: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+      responses: {
+        ValidationError: {
+          description: 'Input validation failed',
+          content: {
+            application/json: {
+              schema: { $ref: '#/components/schemas/ValidationError' },
+            },
+          },
+        },
+        UnauthorizedError: {
+          description: 'Authentication required or invalid credentials',
+          content: {
+            application/json: {
+              schema: { $ref: '#/components/schemas/Error' },
+            },
+          },
+        },
       },
     },
     security: [
@@ -203,7 +271,20 @@ const swaggerOptions = {
 };
 
 const specs = swaggerJsdoc(swaggerOptions);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs));
+
+// Export OpenAPI spec as JSON
+app.get('/docs/openapi.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(specs);
+});
+
+// Export OpenAPI spec as YAML
+const YAML = require('yaml');
+app.get('/docs/openapi.yaml', (req, res) => {
+  res.setHeader('Content-Type', 'text/yaml');
+  res.send(YAML.stringify(specs));
+});
 
 // Metrics endpoint for Prometheus scraping
 app.get('/metrics', metricsService.metricsEndpoint);
@@ -231,15 +312,57 @@ app.get('/ready', async (req, res) => {
   }
 });
 
+// --- Soroban contract stub routes ---
+// Standardized response: { success, data, error }
+
+function sorobanStub(method, params) {
+  return { method, params, txHash: '0x' + Math.random().toString(16).slice(2, 18), network: 'testnet' };
+}
+
+app.post('/streams', (req, res) => {
+  try {
+    const data = sorobanStub('create_stream', req.body);
+    res.status(201).json({ success: true, data, error: null });
+  } catch (err) {
+    res.status(500).json({ success: false, data: null, error: err.message });
+  }
+});
+
+app.get('/streams/:id', (req, res) => {
+  try {
+    const data = sorobanStub('get_stream', { id: req.params.id });
+    data.state = { id: req.params.id, status: 'active', streamed: '0', remaining: '1000' };
+    res.json({ success: true, data, error: null });
+  } catch (err) {
+    res.status(500).json({ success: false, data: null, error: err.message });
+  }
+});
+
+app.post('/streams/:id/withdraw', (req, res) => {
+  try {
+    const data = sorobanStub('withdraw', { id: req.params.id, ...req.body });
+    res.json({ success: true, data, error: null });
+  } catch (err) {
+    res.status(500).json({ success: false, data: null, error: err.message });
+  }
+});
+
 // Auth routes (public — no authMiddleware)
 app.use('/auth', authRoutes);
 
-// API routes
-app.use('/api/streams', authMiddleware, streamRoutes);
-app.use('/api/tokens', authMiddleware, tokenRoutes);
-app.use('/api/admin', authMiddleware, adminRoutes);
-app.use('/api/governance', authMiddleware, governanceRoutes);
-app.use('/users', authMiddleware, userRoutes);
+// v1 API routes (current)
+app.use('/v1/api/streams', authMiddleware, streamRoutes);
+app.use('/v1/api/tokens', authMiddleware, tokenRoutes);
+app.use('/v1/api/admin', authMiddleware, adminRoutes);
+app.use('/v1/api/governance', authMiddleware, governanceRoutes);
+app.use('/v1/users', authMiddleware, userRoutes);
+
+// Legacy unversioned routes (deprecated)
+app.use('/api/streams', deprecationWarning, authMiddleware, streamRoutes);
+app.use('/api/tokens', deprecationWarning, authMiddleware, tokenRoutes);
+app.use('/api/admin', deprecationWarning, authMiddleware, adminRoutes);
+app.use('/api/governance', deprecationWarning, authMiddleware, governanceRoutes);
+app.use('/users', deprecationWarning, authMiddleware, userRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

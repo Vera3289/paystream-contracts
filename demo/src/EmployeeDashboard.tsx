@@ -2,6 +2,7 @@
 import React from "react";
 import { useEmployeeDashboard } from "./useEmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
+import type { FiatCurrency } from "./useFiatPrice";
 import { useTransactionHistory } from "./useTransactionHistory";
 import { exportAllHistory } from "./csvExport";
 
@@ -42,9 +43,17 @@ function StatCard({ id, label, value, icon, accentVar }: StatCardProps) {
 interface EmployeeDashboardProps {
   /** Optional public key from an already-connected wallet in the parent. */
   walletPublicKey?: string | null;
+  fiatCurrency?: FiatCurrency;
+  getTokenPrice?: (token: string) => number | undefined;
+  getTokenLabel?: (token: string) => string;
 }
 
-export function EmployeeDashboard({ walletPublicKey }: EmployeeDashboardProps) {
+export function EmployeeDashboard({
+  walletPublicKey,
+  fiatCurrency,
+  getTokenPrice,
+  getTokenLabel,
+}: EmployeeDashboardProps) {
   const {
     publicKey,
     streams,
@@ -258,6 +267,9 @@ export function EmployeeDashboard({ walletPublicKey }: EmployeeDashboardProps) {
                 key={k}
                 stream={s}
                 claimable={claimable}
+                tokenSymbol={getTokenLabel?.(s.token)}
+                fiatCurrency={fiatCurrency}
+                tokenPrice={getTokenPrice?.(s.token) ?? null}
                 actionLoading={withdrawLoading}
                 onWithdraw={s.status === "Active" ? () => withdraw(s.id) : undefined}
                 onShowHistory={() => handleShowHistory(s.id)}

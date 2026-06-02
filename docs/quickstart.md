@@ -33,6 +33,8 @@ make build
 
 Compiled WASM files land in `target/wasm32v1-none/release/`.
 
+> 🎬 For a short video walkthrough covering wallet setup, create stream, and withdraw, see the [PayStream video tutorial](video-tutorial.md).
+
 ---
 
 ## 3. Run the test suite
