@@ -35,7 +35,7 @@
     "bullmq": "^5.78.0",
     "ioredis": "^5.11.0",
     "@bull-board/api": "^7.1.5",
-    "@bull-board/express": "^5.21.3",
+    "@bull-board/express": "^7.1.5",
     "soroban-client": "^1.0.0",
     "stellar-sdk": "^13.3.0",
     "swagger-jsdoc": "^6.2.8",
