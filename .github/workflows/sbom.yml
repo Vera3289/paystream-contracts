@@ -57,7 +57,7 @@ jobs:
           artifact-name: paystream-sbom.spdx.json
 
       - name: Scan SBOM for known vulnerabilities
-        uses: anchore/scan-action@v4
+        uses: anchore/scan-action@v7
         id: grype
         with:
           sbom: paystream-sbom.cyclonedx.json
