@@ -10,7 +10,20 @@ require('dotenv').config();
 
 const compression = require('compression');
 const correlationId = require('./middleware/correlationId');
-const { apmMiddleware, getMetrics } = require('./middleware/apm');
+const { apmMiddleware } = require('./middleware/apm');
+const metricsService = require('./services/metricsService');
+const { ExpressAdapter } = require('@bull-board/express');
+const { createBullBoard } = require('@bull-board/api');
+const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
+const { notificationQueue, indexerQueue } = require('./services/queueService');
+
+const serverAdapter = new ExpressAdapter();
+serverAdapter.setBasePath('/admin/queues');
+createBullBoard({
+  queues: [new BullMQAdapter(notificationQueue), new BullMQAdapter(indexerQueue)],
+  serverAdapter,
+});
+
 const { loadSecrets } = require('./services/secretsService');
 const { closePool } = require('./services/dbService');
 const authMiddleware = require('./middleware/auth');
@@ -22,7 +35,6 @@ const tokenRoutes = require('./routes/tokens');
 const adminRoutes = require('./routes/admin');
 const governanceRoutes = require('./routes/governance');
 const userRoutes = require('./routes/users');
-const webhookRoutes = require('./routes/webhooks');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -248,7 +260,7 @@ const swaggerOptions = {
         ValidationError: {
           description: 'Input validation failed',
           content: {
-            application/json: {
+            'application/json': {
               schema: { $ref: '#/components/schemas/ValidationError' },
             },
           },
@@ -256,7 +268,7 @@ const swaggerOptions = {
         UnauthorizedError: {
           description: 'Authentication required or invalid credentials',
           content: {
-            application/json: {
+            'application/json': {
               schema: { $ref: '#/components/schemas/Error' },
             },
           },
@@ -367,7 +379,7 @@ app.use('/api/governance', deprecationWarning, authMiddleware, governanceRoutes)
 app.use('/users', deprecationWarning, authMiddleware, userRoutes);
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use((req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     path: req.originalUrl,

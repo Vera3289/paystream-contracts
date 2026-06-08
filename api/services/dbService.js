@@ -16,6 +16,7 @@ if (databaseUrl) {
 // In-memory fallback stores
 const inMemoryPrefs = new Map();
 const inMemoryNotifications = new Map();
+const inMemoryWebhooks = new Map();
 const inMemoryAuditLogs = [];
 let auditLogIdCounter = 1;
 

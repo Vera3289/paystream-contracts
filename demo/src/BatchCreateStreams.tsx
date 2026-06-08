@@ -189,6 +189,7 @@ export function BatchCreateStreams({ walletPublicKey }: BatchCreateStreamsProps)
         deposit: BigInt(Math.round(parseFloat(r.deposit) * STROOP)),
         ratePerSecond: BigInt(Math.round(parseFloat(r.rate))),
         stopTime: BigInt(r.stopTime || "0"),
+        cliffTime: 0n,
       }));
 
       const xdrStr = await client.createStreamsBatch(publicKey, params);

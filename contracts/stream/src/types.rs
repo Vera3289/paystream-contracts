@@ -185,6 +185,7 @@ pub const ERR_ALREADY_PAUSED: &str = "E016: stream is already paused";
 pub const ERR_NOT_PAUSED: &str = "E017: stream is not paused";
 pub const ERR_TOKEN_NOT_ALLOWED: &str = "E018: token is not on the allowlist";
 pub const ERR_CLIFF_AFTER_STOP: &str = "E019: cliff time must be before or equal to stop time";
+pub const ERR_DEPOSIT_TOO_LOW: &str = "E020: deposit too low for given rate";
 
 // ---------------------------------------------------------------------------
 // Multi-sig admin types (#275)

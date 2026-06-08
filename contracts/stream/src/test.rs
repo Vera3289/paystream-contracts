@@ -73,7 +73,7 @@ fn test_create_stream_transfers_exact_deposit() {
     // Employer lost exactly `deposit` tokens.
     assert_eq!(token.balance(&employer), employer_balance_before - deposit);
     // Contract holds exactly `deposit` tokens.
-    assert_eq!(token.balance(&env.current_contract_address()), deposit);
+    assert_eq!(token.balance(&client.address), deposit);
 }
 
 #[test]
@@ -1415,6 +1415,7 @@ fn test_claimable_correct_after_top_up() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
     // deposit = 500, rate = 5 → exhausts in 100s
     let id = client.create_stream(&employer, &employee, &token_id, &500, &5, &0, &0, &0);
 
@@ -1473,6 +1474,7 @@ fn test_withdraw_at_exact_stop_time() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
     let now = env.ledger().timestamp();
     let stop = now + 100;
     // deposit = 1000, rate = 10 → exhausts in exactly 100s
@@ -1516,6 +1518,7 @@ fn test_no_extra_claimable_after_stop_time() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
     let now = env.ledger().timestamp();
     let stop = now + 100;
     let id = client.create_stream(&employer, &employee, &token_id, &1000, &10, &stop, &0, &0);
@@ -1572,6 +1575,7 @@ fn test_far_future_timestamp_capped_by_deposit() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
     let deposit: i128 = 5_000;
     let id = client.create_stream(&employer, &employee, &token_id, &deposit, &10, &0, &0, &0);
 

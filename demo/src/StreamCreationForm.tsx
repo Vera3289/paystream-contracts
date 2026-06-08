@@ -12,7 +12,7 @@ import { useTokenBalance } from "./useTokenBalance";
 
 interface StreamCreationFormProps {
   defaultToken: string;
-  onSubmit: (employee: string, token: string, deposit: bigint, rate: bigint, stopTime: bigint) => Promise<void>;
+  onSubmit: (employee: string, token: string, deposit: bigint, rate: bigint, stopTime: bigint) => Promise<any>;
   loading: boolean;
   walletConnected: boolean;
   /** Employer's public key — used to fetch token balance */

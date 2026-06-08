@@ -4,8 +4,8 @@
 
 mod access_control;
 mod events;
-mod storage;
-mod types;
+pub mod storage;
+pub mod types;
 mod validate;
 
 #[cfg(test)]

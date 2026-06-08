@@ -10,6 +10,9 @@ import { EmployerDashboard } from "./EmployerDashboard";
 import { EmployeeDashboard } from "./EmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
 import { BatchCreateStreams } from "./BatchCreateStreams";
+import { WalletButton } from "./WalletButton";
+import { WalletModal } from "./WalletModal";
+import { StreamCreationForm } from "./StreamCreationForm";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { OnboardingWizard, shouldShowOnboarding } from "./OnboardingWizard";
 
