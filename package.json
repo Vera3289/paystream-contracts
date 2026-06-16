@@ -22,7 +22,7 @@
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1061.0",
     "@bull-board/api": "^7.1.5",
-    "@bull-board/express": "^7.1.5",
+    "@bull-board/express": "^8.0.0",
     "bullmq": "^5.78.1",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
