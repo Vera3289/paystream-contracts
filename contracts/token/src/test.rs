@@ -53,3 +53,55 @@ fn test_transfer_overdraft() {
     client.initialize(&admin, &100);
     client.transfer(&admin, &user, &999);
 }
+
+#[test]
+fn test_approve_and_transfer_from() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+
+    client.approve(&admin, &spender, &300);
+    client.transfer_from(&spender, &admin, &recipient, &200);
+
+    assert_eq!(client.balance(&admin), 800);
+    assert_eq!(client.balance(&recipient), 200);
+}
+
+#[test]
+#[should_panic(expected = "allowance exceeded")]
+fn test_transfer_from_exceeds_allowance() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.initialize(&admin, &500);
+
+    client.approve(&admin, &spender, &100);
+    client.transfer_from(&spender, &admin, &recipient, &200);
+}
+
+#[test]
+#[should_panic(expected = "not admin")]
+fn test_mint_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+
+    client.mint(&stranger, &user, &100);
+}
+
+#[test]
+#[should_panic(expected = "not admin")]
+fn test_burn_requires_admin() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+
+    client.burn(&stranger, &user, &100);
+}

@@ -41,6 +41,18 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-cov-report
+          path: lcov.info
+
   build-wasm:
     name: Build WASM
     runs-on: ubuntu-latest
