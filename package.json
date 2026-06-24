@@ -1,0 +1,12 @@
+{
+  "name": "paystream-contracts-tests",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "jest --coverage",
+    "test:watch": "jest --watch"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0"
+  }
+}
