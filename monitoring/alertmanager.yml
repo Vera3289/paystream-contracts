@@ -1,0 +1,26 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: slack-default
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - match:
+        severity: critical
+      receiver: pagerduty-critical
+
+receivers:
+  - name: slack-default
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"  # set in environment
+        channel: "#paystream-alerts"
+        title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+
+  - name: pagerduty-critical
+    pagerduty_configs:
+      - routing_key: "${PAGERDUTY_INTEGRATION_KEY}"  # set in environment
+        description: "{{ .CommonLabels.alertname }}: {{ .CommonAnnotations.summary }}"
