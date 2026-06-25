@@ -1364,3 +1364,56 @@ code {
   background: var(--input-bg);
   color: var(--text);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   ISSUE #224 — Stream detail page
+══════════════════════════════════════════════════════════════════════════════ */
+
+.sdp-root {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sdp-back {
+  align-self: flex-start;
+}
+
+.sdp-title {
+  margin: 0;
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sdp-section {
+  padding: 16px;
+}
+
+.sdp-section-title {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.sdp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.sdp-topup-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}

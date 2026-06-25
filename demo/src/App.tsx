@@ -11,6 +11,8 @@ import { EmployeeDashboard } from "./EmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
 import { BatchCreateStreams } from "./BatchCreateStreams";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { StreamDetailPage } from "./StreamDetailPage";
+import { useEmployerDashboard } from "./useEmployerDashboard";
 
 const STROOP = 10_000_000n; // 1 XLM in stroops
 
@@ -104,7 +106,7 @@ function estimatedDuration(deposit: string, rate: string): string | null {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-type AppView = "demo" | "dashboard" | "employee" | "batch";
+type AppView = "demo" | "dashboard" | "employee" | "batch" | "detail";
 
 export default function App() {
   const [dark, toggleDark] = useDarkMode();
@@ -112,6 +114,42 @@ export default function App() {
   const { publicKey, streams, claimableAmounts, error, loading, connect, loadStream, createStream, withdraw } =
     usePayStream();
   const history = useTransactionHistory();
+
+  // Employer actions for stream detail page
+  const employer = useEmployerDashboard(publicKey);
+
+  // Detail view state
+  const [detailStreamId, setDetailStreamId] = useState<bigint | null>(null);
+
+  // ── Hash routing (#stream/{id}) ───────────────────────────────────────────
+  useEffect(() => {
+    const handleHash = async () => {
+      const hash = window.location.hash;
+      const match = hash.match(/^#stream\/(\d+)$/);
+      if (match) {
+        const id = BigInt(match[1]);
+        setDetailStreamId(id);
+        setView("detail");
+        // Ensure the stream is loaded
+        const already = streams.find((s) => s.id === id);
+        if (!already) await loadStream(id);
+      }
+    };
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+    return () => window.removeEventListener("hashchange", handleHash);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const navigateToDetail = (streamId: bigint) => {
+    window.location.hash = `#stream/${streamId}`;
+  };
+
+  const navigateBack = () => {
+    window.location.hash = "";
+    setView("demo");
+    setDetailStreamId(null);
+  };
 
   // Wallet modal state
   const [walletModalOpen, setWalletModalOpen] = useState(false);
@@ -348,6 +386,38 @@ export default function App() {
         </button>
       </nav>
 
+      {/* ── Stream Detail panel ── */}
+      {view === "detail" && detailStreamId !== null && (() => {
+        const detailStream = streams.find((s) => s.id === detailStreamId);
+        if (!detailStream) return (
+          <main style={{ padding: 24 }}>
+            <button className="btn btn-secondary" onClick={navigateBack}>← Back</button>
+            <p style={{ marginTop: 16 }}>
+              {loading ? "Loading stream…" : `Stream #${detailStreamId} not found.`}
+            </p>
+          </main>
+        );
+        const key = detailStreamId.toString();
+        const claimable = claimableAmounts[key] ?? 0n;
+        return (
+          <ErrorBoundary label="Stream Detail">
+            <StreamDetailPage
+              stream={detailStream}
+              claimable={claimable}
+              publicKey={publicKey}
+              onBack={navigateBack}
+              onWithdraw={withdraw ? (id) => withdraw(id) : undefined}
+              onPause={(id) => employer.handleAction("pause", id)}
+              onResume={(id) => employer.handleAction("resume", id)}
+              onCancel={(id) => employer.handleAction("cancel", id)}
+              onTopUp={employer.handleTopUp}
+              loading={loading || employer.loading}
+              actionLoading={employer.actionLoading}
+            />
+          </ErrorBoundary>
+        );
+      })()}
+
       {/* ── Batch Create panel ── */}
       <div
         role="tabpanel"
@@ -551,6 +621,15 @@ export default function App() {
                       onExportCsv={() => handleExportCsv(s.id)}
                       loading={loading}
                     >
+                      <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)" }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => navigateToDetail(s.id)}
+                          aria-label={`View full details for stream ${key}`}
+                        >
+                          🔍 View Detail
+                        </button>
+                      </div>
                       {/* Inline history panel */}
                       {historyStreamId === s.id && (
                         <div
