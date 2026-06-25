@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import React from "react";
 import type { Stream } from "@paystream/sdk";
+import { StreamStatusBadge, StreamStatus } from "./StreamStatusBadge";
+import { useBalanceTicker } from "./useBalanceTicker";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -17,6 +19,17 @@ function formatRate(stroopsPerSec: bigint): string {
   return `${stroopsPerSec.toString()} stroops/s`;
 }
 
+function formatFiat(amount: number, price: number, currency: string): string {
+  const value = amount * price;
+  return `${currency.toUpperCase()} ${value.toFixed(2)}`;
+}
+
+function maybeFiatSublabel(amount: bigint, tokenPrice?: number | null, fiatCurrency?: string): string | undefined {
+  if (!tokenPrice || !fiatCurrency) return undefined;
+  const tokenAmount = Number(amount) / 10_000_000;
+  return `≈ ${formatFiat(tokenAmount, tokenPrice, fiatCurrency)}`;
+}
+
 function formatTs(ts: bigint): string {
   if (ts === 0n) return "Indefinite";
   return new Date(Number(ts) * 1000).toLocaleString();
@@ -24,6 +37,40 @@ function formatTs(ts: bigint): string {
 
 function isoTs(ts: bigint): string {
   return new Date(Number(ts) * 1000).toISOString();
+}
+
+// ─── Explorer URL helpers ────────────────────────────────────────────────────
+
+const EXPLORER_BASE = "https://stellar.expert/explorer/testnet";
+
+function explorerAccountUrl(address: string): string {
+  return `${EXPLORER_BASE}/account/${address}`;
+}
+
+function explorerTxUrl(hash: string): string {
+  return `${EXPLORER_BASE}/tx/${hash}`;
+}
+
+// ─── ExplorerLink (#239) ──────────────────────────────────────────────────────
+
+interface ExplorerLinkProps {
+  href: string;
+  label: string;
+  children: React.ReactNode;
+}
+
+function ExplorerLink({ href, label, children }: ExplorerLinkProps) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={label}
+      className="explorer-link"
+    >
+      {children}
+    </a>
+  );
 }
 
 // ─── MetricItem ───────────────────────────────────────────────────────────────
@@ -68,6 +115,12 @@ export interface StreamStatusCardProps {
   stream: Stream;
   /** Live claimable amount in stroops, updated by polling. */
   claimable?: bigint;
+  /** Optional token symbol to render next to amounts. */
+  tokenSymbol?: string;
+  /** Optional fiat currency code for the current user's preference. */
+  fiatCurrency?: string;
+  /** Optional fiat price per token unit. */
+  tokenPrice?: number | null;
 
   // ── Action callbacks (all optional — omit what's not relevant) ──
   /** Employee: withdraw all claimable tokens. */
@@ -84,6 +137,11 @@ export interface StreamStatusCardProps {
   onExportCsv?: () => void;
   /** Employer: top up the stream with more XLM. */
   onShowTopUp?: () => void;
+  /**
+   * Optional last transaction hash — shown as an explorer link (#239).
+   * Pass the hash returned by submitTransaction after any action.
+   */
+  lastTxHash?: string | null;
 
   // ── Loading state ──
   /** True while any transaction is in flight (disables all buttons). */
@@ -112,6 +170,9 @@ export interface StreamStatusCardProps {
 export function StreamStatusCard({
   stream,
   claimable = 0n,
+  tokenSymbol,
+  fiatCurrency,
+  tokenPrice,
   onWithdraw,
   onPause,
   onResume,
@@ -119,11 +180,15 @@ export function StreamStatusCard({
   onShowHistory,
   onExportCsv,
   onShowTopUp,
+  lastTxHash = null,
   loading = false,
   actionLoading = null,
   children,
 }: StreamStatusCardProps) {
   const key = stream.id.toString();
+
+  // Use the balance ticker hook for live-updating claimable balance
+  const liveClaimable = useBalanceTicker(stream, claimable);
 
   // Derived values
   const locked =
@@ -150,11 +215,9 @@ export function StreamStatusCard({
   const showCsv      = !!onExportCsv;
   const hasActions   = showWithdraw || showPause || showResume || showCancel || showTopUp || showHistory || showCsv;
 
-  const handleCancel = () => {
-    if (window.confirm(`Cancel stream #${key}? This cannot be undone.`)) {
-      onCancel!();
-    }
-  };
+  // onCancel is called directly; the parent is responsible for showing a
+  // confirmation modal (CancelConfirmModal) before invoking this callback.
+  const handleCancel = () => onCancel!();
 
   return (
     <article
@@ -166,21 +229,29 @@ export function StreamStatusCard({
       <header className="ssc-header">
         <div className="ssc-title-row">
           <h3 className="ssc-stream-id">Stream #{key}</h3>
-          <span
-            className={`status-badge status-${stream.status.toLowerCase()}`}
-            aria-label={`Status: ${stream.status}`}
-          >
-            {stream.status}
-          </span>
+          <StreamStatusBadge status={stream.status as StreamStatus} />
         </div>
         <p className="ssc-employee">
           <span className="ssc-field-label">Employee:</span>{" "}
-          <code
-            title={stream.employee}
-            aria-label={`Employee address: ${stream.employee}`}
+          <ExplorerLink
+            href={explorerAccountUrl(stream.employee)}
+            label={`View employee account ${stream.employee} on Stellar Explorer`}
           >
-            {stream.employee}
-          </code>
+            <code title={stream.employee} aria-label={`Employee address: ${stream.employee}`}>
+              {stream.employee.slice(0, 6)}…{stream.employee.slice(-4)}
+            </code>
+          </ExplorerLink>
+        </p>
+        <p className="ssc-employee">
+          <span className="ssc-field-label">Employer:</span>{" "}
+          <ExplorerLink
+            href={explorerAccountUrl(stream.employer)}
+            label={`View employer account ${stream.employer} on Stellar Explorer`}
+          >
+            <code title={stream.employer} aria-label={`Employer address: ${stream.employer}`}>
+              {stream.employer.slice(0, 6)}…{stream.employer.slice(-4)}
+            </code>
+          </ExplorerLink>
         </p>
       </header>
 
@@ -193,15 +264,17 @@ export function StreamStatusCard({
         />
         <MetricItem
           label="Total Deposit"
-          value={`${formatXlm(stream.deposit)} XLM`}
+          value={`${formatXlm(stream.deposit)} ${tokenSymbol ?? "XLM"}`}
+          sublabel={maybeFiatSublabel(stream.deposit, tokenPrice, fiatCurrency)}
         />
         <MetricItem
           label="Withdrawn"
-          value={`${formatXlm(stream.withdrawn)} XLM`}
+          value={`${formatXlm(stream.withdrawn)} ${tokenSymbol ?? "XLM"}`}
+          sublabel={maybeFiatSublabel(stream.withdrawn, tokenPrice, fiatCurrency)}
         />
         <MetricItem
           label="Claimable Now"
-          value={`${formatXlm(claimable)} XLM`}
+          value={`${formatXlm(liveClaimable)} XLM`}
           highlight
           live={stream.status === "Active"}
         />
@@ -349,6 +422,19 @@ export function StreamStatusCard({
 
       {/* ── Expandable slot (e.g. inline history panel) ── */}
       {children}
+
+      {/* ── Last transaction link (#239) ── */}
+      {lastTxHash && (
+        <div className="ssc-last-tx">
+          <span className="ssc-field-label">Last tx:</span>{" "}
+          <ExplorerLink
+            href={explorerTxUrl(lastTxHash)}
+            label={`View transaction ${lastTxHash} on Stellar Explorer`}
+          >
+            <code>{lastTxHash.slice(0, 8)}…{lastTxHash.slice(-6)}</code>
+          </ExplorerLink>
+        </div>
+      )}
     </article>
   );
 }

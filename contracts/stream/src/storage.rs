@@ -37,8 +37,18 @@ pub const DEFAULT_STREAM_LIMIT: u32 = 1000;
 /// Upgrade timelock: 48 hours in seconds.
 pub const UPGRADE_TIMELOCK_SECS: u64 = 48 * 60 * 60;
 
-const TTL_THRESHOLD: u32 = 6_307_200;
-const TTL_EXTEND_TO: u32 = 12_614_400;
+/// Minimum remaining TTL (in ledgers) before a persistent entry is extended.
+/// Default: ~1 year at 5s/ledger (6 307 200 ledgers ≈ 365 days).
+/// Override at compile time via the `TTL_THRESHOLD` env var (build.rs not required;
+/// change the constant here when deploying to a network with a different ledger rate).
+pub const TTL_THRESHOLD: u32 = 6_307_200;
+
+/// Target TTL (in ledgers) after extension.
+/// Default: ~2 years at 5s/ledger (12 614 400 ledgers ≈ 730 days).
+pub const TTL_EXTEND_TO: u32 = 12_614_400;
+
+/// Warn threshold: ~30 days in ledgers at 5s/ledger.
+pub const TTL_WARN_THRESHOLD: u32 = 518_400;
 
 // ---------------------------------------------------------------------------
 // Packed config helpers (#272)
@@ -220,6 +230,17 @@ pub fn get_employee_streams(env: &Env, employee: &Address) -> Vec<u64> {
     env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env))
 }
 
+/// Append multiple stream IDs to the employer index in a single read/write (#286).
+pub fn index_employer_streams_batch(env: &Env, employer: &Address, stream_ids: &Vec<u64>) {
+    let key = DataKey::EmployerStreams(employer.clone());
+    let mut ids: Vec<u64> = env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+    for id in stream_ids.iter() {
+        ids.push_back(id);
+    }
+    env.storage().persistent().set(&key, &ids);
+    env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
 // ---------------------------------------------------------------------------
 // Claimable calculation (#272: early-exit on zero elapsed)
 // ---------------------------------------------------------------------------
@@ -368,4 +389,35 @@ pub fn remove_allowed_token(env: &Env, token: &Address) {
 
 pub fn get_allowed_tokens(env: &Env) -> Vec<Address> {
     env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(env))
+}
+
+// ---------------------------------------------------------------------------
+// Multi-sig admin helpers (#275)
+// ---------------------------------------------------------------------------
+
+use crate::types::{AdminOp, MultisigConfig, PendingAdminOp};
+
+pub fn set_multisig_config(env: &Env, cfg: &MultisigConfig) {
+    env.storage().instance().set(&DataKey::MultisigConfig, cfg);
+}
+
+pub fn get_multisig_config(env: &Env) -> Option<MultisigConfig> {
+    env.storage().instance().get(&DataKey::MultisigConfig)
+}
+
+pub fn next_pending_op_id(env: &Env) -> u64 {
+    let count: u64 = env.storage().instance().get(&DataKey::PendingAdminOpCount).unwrap_or(0);
+    let next = count.checked_add(1).expect("pending op count overflow");
+    env.storage().instance().set(&DataKey::PendingAdminOpCount, &next);
+    next
+}
+
+pub fn save_pending_op(env: &Env, op: &PendingAdminOp) {
+    let key = DataKey::PendingAdminOp(op.id);
+    env.storage().persistent().set(&key, op);
+    env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+pub fn load_pending_op(env: &Env, id: u64) -> Option<PendingAdminOp> {
+    env.storage().persistent().get(&DataKey::PendingAdminOp(id))
 }

@@ -2,7 +2,10 @@
 import React from "react";
 import { useEmployerDashboard } from "./useEmployerDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
+import { CancelConfirmModal } from "./CancelConfirmModal";
+import { StreamCardSkeleton } from "./StreamCardSkeleton";
 import type { Stream } from "@paystream/sdk";
+import type { FiatCurrency, TokenPricingMetadata } from "./useFiatPrice";
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -43,9 +46,17 @@ function StatCard({ id, label, value, icon, accentVar }: StatCardProps) {
 interface EmployerDashboardProps {
   /** Optional public key from an already-connected wallet in the parent. */
   walletPublicKey?: string | null;
+  fiatCurrency?: FiatCurrency;
+  getTokenPrice?: (token: string) => number | undefined;
+  getTokenLabel?: (token: string) => string;
 }
 
-export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
+export function EmployerDashboard({
+  walletPublicKey,
+  fiatCurrency,
+  getTokenPrice,
+  getTokenLabel,
+}: EmployerDashboardProps) {
   const {
     publicKey,
     streams,
@@ -55,6 +66,7 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
     error,
     scanned,
     chainTotal,
+    lastTxHashes,
     connect,
     refresh,
     handleAction,
@@ -64,6 +76,7 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
   const [statusFilter, setStatusFilter] = React.useState<string>("all");
   const [topUpStreamId, setTopUpStreamId] = React.useState<bigint | null>(null);
   const [topUpAmount, setTopUpAmount] = React.useState<string>("");
+  const [cancelStream, setCancelStream] = React.useState<Stream | null>(null);
 
   const filtered =
     statusFilter === "all"
@@ -199,6 +212,15 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
         </div>
       )}
 
+      {/* ── Loading skeletons (initial load and refetch) ── */}
+      {loading && streams.length === 0 && (
+        <div className="db-stream-list" aria-busy="true" aria-label="Loading streams">
+          <StreamCardSkeleton />
+          <StreamCardSkeleton />
+          <StreamCardSkeleton />
+        </div>
+      )}
+
       {/* ── Empty state ── */}
       {!loading && streams.length === 0 && (
         <div className="db-empty card" role="status">
@@ -263,29 +285,44 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
               <StreamStatusCard
                 key={k}
                 stream={s}
+                lastTxHash={lastTxHashes[k] ?? null}
                 actionLoading={streamActionLoading}
                 onPause={() => handleAction("pause", s.id)}
                 onResume={() => handleAction("resume", s.id)}
-                onCancel={() => handleAction("cancel", s.id)}
+                onCancel={() => setCancelStream(s)}
                 onShowTopUp={() => {
                   setTopUpStreamId(isToppingUp ? null : s.id);
                   setTopUpAmount("");
                 }}
               >
-                {/* Inline Top-up Form */}
+                {/* Inline Top-up Form (#225) */}
                 {isToppingUp && (
                   <form
                     className="history-panel"
                     onSubmit={handleTopUpSubmit}
                     aria-label={`Top up stream ${k}`}
                   >
-                    <h3>Top Up Stream</h3>
+                    <h3>Top Up Stream #{k}</h3>
+                    <dl className="topup-summary">
+                      <div className="topup-summary-row">
+                        <dt>Current deposit</dt>
+                        <dd>{(Number(s.deposit) / 10_000_000).toFixed(4)} XLM</dd>
+                      </div>
+                      {topUpAmount && !isNaN(parseFloat(topUpAmount)) && parseFloat(topUpAmount) > 0 && (
+                        <div className="topup-summary-row topup-summary-new">
+                          <dt>New total</dt>
+                          <dd>
+                            {((Number(s.deposit) / 10_000_000) + parseFloat(topUpAmount)).toFixed(4)} XLM
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
                     <div className="form-group" style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
                       <input
                         type="number"
                         step="0.0001"
                         min="0.0001"
-                        placeholder="Amount in XLM"
+                        placeholder="Additional amount (XLM)"
                         value={topUpAmount}
                         onChange={(e) => setTopUpAmount(e.target.value)}
                         required
@@ -296,7 +333,7 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
                       <button
                         type="submit"
                         className="btn btn-success"
-                        disabled={!!actionLoading || !topUpAmount}
+                        disabled={!!actionLoading || !topUpAmount || parseFloat(topUpAmount) <= 0}
                         aria-busy={streamActionLoading === "topup"}
                       >
                         {streamActionLoading === "topup" ? "Confirming…" : "Confirm Top Up"}
@@ -313,6 +350,22 @@ export function EmployerDashboard({ walletPublicKey }: EmployerDashboardProps) {
             );
           })}
         </div>
+      )}
+
+      {/* ── Cancel confirmation modal (#236) ── */}
+      {cancelStream && (
+        <CancelConfirmModal
+          streamId={cancelStream.id.toString()}
+          earnedStroops={(cancelStream.deposit > cancelStream.withdrawn
+            ? cancelStream.deposit - cancelStream.withdrawn
+            : 0n) as bigint}
+          refundStroops={cancelStream.withdrawn}
+          onConfirm={() => {
+            handleAction("cancel", cancelStream.id);
+            setCancelStream(null);
+          }}
+          onClose={() => setCancelStream(null)}
+        />
       )}
     </div>
   );

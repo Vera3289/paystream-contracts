@@ -156,6 +156,31 @@ export class PayStreamClient {
     return BigInt(scValToNative(val) as string | number);
   }
 
+  /**
+   * Helper to fetch a user's balance from a SEP-41 token contract.
+   */
+  async getTokenBalance(tokenAddress: string, userAddress: string): Promise<bigint> {
+    const tokenContract = new Contract(tokenAddress);
+    const account = await this.rpc.getAccount(
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+    );
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(tokenContract.call("balance", new Address(userAddress).toScVal()))
+      .setTimeout(TIMEOUT_SECONDS)
+      .build();
+
+    const simResult = await this.rpc.simulateTransaction(tx);
+    if (rpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+    const success = simResult as rpc.Api.SimulateTransactionSuccessResponse;
+    if (!success.result) throw new Error("No result from simulation");
+    return BigInt(scValToNative(success.result.retval) as string | number);
+  }
+
   // ─── mutating (return unsigned tx XDR) ──────────────────────────────────────
 
   /**
@@ -178,6 +203,7 @@ export class PayStreamClient {
    * @param ratePerSecond   - Tokens streamed per second
    * @param stopTime        - Hard stop timestamp (0 = indefinite)
    * @param cooldownPeriod  - Min seconds between withdrawals (0 = none)
+   * @param cliffTime       - Timestamp before which nothing is claimable (0 = none)
    */
   async createStream(
     employer: string,
@@ -186,7 +212,8 @@ export class PayStreamClient {
     deposit: bigint,
     ratePerSecond: bigint,
     stopTime: bigint,
-    cooldownPeriod: bigint
+    cooldownPeriod: bigint,
+    cliffTime: bigint
   ): Promise<string> {
     return this.buildTx(employer, "create_stream", [
       new Address(employer).toScVal(),
@@ -196,6 +223,7 @@ export class PayStreamClient {
       nativeToScVal(ratePerSecond, { type: "i128" }),
       nativeToScVal(stopTime, { type: "u64" }),
       nativeToScVal(cooldownPeriod, { type: "u64" }),
+      nativeToScVal(cliffTime, { type: "u64" }),
     ]);
   }
 
@@ -229,6 +257,10 @@ export class PayStreamClient {
             key: xdr.ScVal.scvSymbol("stop_time"),
             val: nativeToScVal(p.stopTime, { type: "u64" }),
           }),
+          new xdr.ScMapEntry({
+            key: xdr.ScVal.scvSymbol("cliff_time"),
+            val: nativeToScVal(p.cliffTime, { type: "u64" }),
+          }),
         ])
       )
     );
@@ -239,13 +271,94 @@ export class PayStreamClient {
   }
 
   /**
-   * Employee withdraws all claimable tokens. Returns unsigned transaction XDR.
+   * Employee withdraws claimable tokens. Pass `amount` to withdraw a partial
+   * amount, or omit / pass `0` to withdraw the full claimable balance.
+   * Returns unsigned transaction XDR.
    */
-  async withdraw(employee: string, streamId: bigint): Promise<string> {
+  async withdraw(employee: string, streamId: bigint, amount?: bigint): Promise<string> {
+    const amt = amount ?? 0n;
     return this.buildTx(employee, "withdraw", [
       new Address(employee).toScVal(),
       nativeToScVal(streamId, { type: "u64" }),
+      nativeToScVal(amt, { type: "i128" }),
     ]);
+  }
+
+  /**
+   * Employer updates the rate of an active stream. Returns unsigned transaction XDR.
+   */
+  async updateRate(
+    employer: string,
+    streamId: bigint,
+    newRate: bigint
+  ): Promise<string> {
+    return this.buildTx(employer, "update_rate", [
+      new Address(employer).toScVal(),
+      nativeToScVal(streamId, { type: "u64" }),
+      nativeToScVal(newRate, { type: "i128" }),
+    ]);
+  }
+
+  /**
+   * Propose a new admin for the contract. Returns unsigned transaction XDR.
+   */
+  async proposeAdmin(currentAdmin: string, newAdmin: string): Promise<string> {
+    return this.buildTx(currentAdmin, "propose_admin", [
+      new Address(currentAdmin).toScVal(),
+      new Address(newAdmin).toScVal(),
+    ]);
+  }
+
+  /**
+   * Accept the admin role. Returns unsigned transaction XDR.
+   */
+  async acceptAdmin(newAdmin: string): Promise<string> {
+    return this.buildTx(newAdmin, "accept_admin", [
+      new Address(newAdmin).toScVal(),
+    ]);
+  }
+
+  /**
+   * Pause the entire contract (Admin only). Returns unsigned transaction XDR.
+   */
+  async pauseContract(admin: string, nonce: bigint): Promise<string> {
+    return this.buildTx(admin, "pause_contract", [
+      new Address(admin).toScVal(),
+      nativeToScVal(nonce, { type: "u64" }),
+    ]);
+  }
+
+  /**
+   * Unpause the entire contract (Admin only). Returns unsigned transaction XDR.
+   */
+  async unpauseContract(admin: string, nonce: bigint): Promise<string> {
+    return this.buildTx(admin, "unpause_contract", [
+      new Address(admin).toScVal(),
+      nativeToScVal(nonce, { type: "u64" }),
+    ]);
+  }
+
+  /**
+   * Set the minimum deposit amount (Admin only). Returns unsigned transaction XDR.
+   */
+  async setMinDeposit(
+    admin: string,
+    nonce: bigint,
+    amount: bigint
+  ): Promise<string> {
+    return this.buildTx(admin, "set_min_deposit", [
+      new Address(admin).toScVal(),
+      nativeToScVal(nonce, { type: "u64" }),
+      nativeToScVal(amount, { type: "i128" }),
+    ]);
+  }
+
+  /**
+   * Get the current admin nonce.
+   */
+  async adminNonce(): Promise<bigint> {
+    const val = await this.simulateRead("admin_nonce", []);
+    return BigInt(scValToNative(val) as string | number);
   }
 
   /**

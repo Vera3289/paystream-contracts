@@ -6,7 +6,7 @@
  * persist across sessions without any network cost.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { CONFIG } from "./config";
 
 export interface StreamTemplate {
@@ -34,7 +34,12 @@ function persist(templates: StreamTemplate[]): void {
 }
 
 export function useStreamTemplates() {
-  const [templates, setTemplates] = useState<StreamTemplate[]>(load);
+  const [templates, setTemplates] = useState<StreamTemplate[]>([]);
+
+  // Issue #240: load from localStorage after mount only (SSR-safe)
+  useEffect(() => {
+    setTemplates(load());
+  }, []);
 
   const save = useCallback((tpl: Omit<StreamTemplate, "id" | "createdAt">) => {
     const next: StreamTemplate = {
