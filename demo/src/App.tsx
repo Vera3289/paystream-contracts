@@ -109,6 +109,7 @@ type AppView = "demo" | "dashboard" | "employee" | "batch";
 export default function App() {
   const [dark, toggleDark] = useDarkMode();
   const [view, setView] = useState<AppView>("demo");
+  const [navOpen, setNavOpen] = useState(false);
   const { publicKey, streams, claimableAmounts, error, loading, connect, loadStream, createStream, withdraw } =
     usePayStream();
   const history = useTransactionHistory();
@@ -271,7 +272,20 @@ export default function App() {
     <div className="app-root" id="main-content">
       {/* ── Header ── */}
       <header className="app-header" role="banner">
-        <h1>💸 PayStream Demo</h1>
+        <div className="header-left">
+          <h1>💸 PayStream Demo</h1>
+          <button
+            className="hamburger-btn"
+            aria-label={navOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={navOpen}
+            aria-controls="main-nav"
+            onClick={() => setNavOpen((o) => !o)}
+          >
+            <span className="hamburger-bar" />
+            <span className="hamburger-bar" />
+            <span className="hamburger-bar" />
+          </button>
+        </div>
         <div className="header-right">
           <p className="subtitle">Testnet — real-time salary streaming on Stellar</p>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
@@ -301,15 +315,20 @@ export default function App() {
         error={error}
       />
 
+      {/* ── Nav overlay ── */}
+      {navOpen && (
+        <div className="nav-overlay" aria-hidden="true" onClick={() => setNavOpen(false)} />
+      )}
+
       {/* ── View tabs ── */}
-      <nav className="view-tabs" role="tablist" aria-label="Application views">
+      <nav id="main-nav" className={`view-tabs${navOpen ? " mobile-nav-open" : ""}`} role="tablist" aria-label="Application views">
         <button
           role="tab"
           id="tab-demo"
           aria-selected={view === "demo"}
           aria-controls="panel-demo"
           className={`tab-btn${view === "demo" ? " tab-active" : ""}`}
-          onClick={() => setView("demo")}
+          onClick={() => { setView("demo"); setNavOpen(false); }}
           onKeyDown={(e) => handleTabKeyDown(e, "demo")}
         >
           🖥 Stream Demo
@@ -320,7 +339,7 @@ export default function App() {
           aria-selected={view === "dashboard"}
           aria-controls="panel-dashboard"
           className={`tab-btn${view === "dashboard" ? " tab-active" : ""}`}
-          onClick={() => setView("dashboard")}
+          onClick={() => { setView("dashboard"); setNavOpen(false); }}
           onKeyDown={(e) => handleTabKeyDown(e, "dashboard")}
         >
           💼 Employer Dashboard
@@ -331,7 +350,7 @@ export default function App() {
           aria-selected={view === "employee"}
           aria-controls="panel-employee"
           className={`tab-btn${view === "employee" ? " tab-active" : ""}`}
-          onClick={() => setView("employee")}
+          onClick={() => { setView("employee"); setNavOpen(false); }}
           onKeyDown={(e) => handleTabKeyDown(e, "employee")}
         >
           💳 Employee Earnings
@@ -342,7 +361,7 @@ export default function App() {
           aria-selected={view === "batch"}
           aria-controls="panel-batch"
           className={`tab-btn${view === "batch" ? " tab-active" : ""}`}
-          onClick={() => setView("batch")}
+          onClick={() => { setView("batch"); setNavOpen(false); }}
         >
           📋 Batch Create
         </button>
