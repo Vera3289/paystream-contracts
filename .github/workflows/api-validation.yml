@@ -1,0 +1,42 @@
+name: API Response Validation
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "contracts/stream/src/api_validation/**"
+      - "contracts/stream/src/**"
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  api-validation:
+    name: API Response Validation Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run API validation tests
+        run: cargo test api_validation -- --test-output immediate
+
+      - name: Run error code tests
+        run: cargo test error_codes -- --test-output immediate
