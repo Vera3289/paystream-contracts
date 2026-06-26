@@ -35,6 +35,7 @@ const tokenRoutes = require('./routes/tokens');
 const adminRoutes = require('./routes/admin');
 const governanceRoutes = require('./routes/governance');
 const userRoutes = require('./routes/users');
+const apiKeyRoutes = require('./routes/apiKeys');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -363,6 +364,9 @@ app.post('/streams/:id/withdraw', (req, res) => {
 
 // Auth routes (public — no authMiddleware)
 app.use('/auth', authRoutes);
+
+// API key management
+app.use('/v1/api/api-keys', authMiddleware, apiKeyRoutes);
 
 // v1 API routes (current)
 app.use('/v1/api/streams', authMiddleware, streamRoutes);
