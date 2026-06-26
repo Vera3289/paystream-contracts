@@ -202,7 +202,7 @@ impl StreamContract {
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
         stream.status = StreamStatus::Paused;
         save_stream(&env, &stream);
-        events::stream_status_changed(&env, stream_id, &StreamStatus::Paused);
+        events::stream_paused(&env, stream_id, &employer);
     }
 
     /// Employer resumes a paused stream.
@@ -215,7 +215,7 @@ impl StreamContract {
         stream.last_withdraw_time = env.ledger().timestamp();
         stream.status = StreamStatus::Active;
         save_stream(&env, &stream);
-        events::stream_status_changed(&env, stream_id, &StreamStatus::Active);
+        events::stream_resumed(&env, stream_id, &employer);
     }
 
     /// Employer cancels a stream and reclaims unstreamed funds.
@@ -253,7 +253,7 @@ impl StreamContract {
 
         stream.status = StreamStatus::Cancelled;
         save_stream(&env, &stream);
-        events::stream_status_changed(&env, stream_id, &StreamStatus::Cancelled);
+        events::stream_cancelled(&env, stream_id, &employer);
     }
 
     /// Read a stream by ID.

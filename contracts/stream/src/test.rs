@@ -385,3 +385,76 @@ fn test_create_stream_positive_rate_ok() {
     assert_eq!(id, 1);
     assert_eq!(client.get_stream(&id).rate_per_second, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #493 – Pause / Resume edge cases
+// ---------------------------------------------------------------------------
+
+/// Pausing an already-paused stream must fail.
+#[test]
+#[should_panic(expected = "stream not active")]
+fn test_pause_already_paused_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id); // must panic
+}
+
+/// Resuming an active (non-paused) stream must fail.
+#[test]
+#[should_panic(expected = "stream not paused")]
+fn test_resume_active_stream_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    client.resume_stream(&employer, &id); // not paused — must panic
+}
+
+/// A non-employer cannot pause another employer's stream.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_pause_wrong_employer_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let other = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+    client.pause_stream(&other, &id); // wrong employer — must panic
+}
+
+/// Cancelling a paused stream pays out pre-pause accrual and refunds remainder.
+#[test]
+fn test_cancel_paused_stream() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0);
+
+    env.ledger().with_mut(|l| l.timestamp += 100); // 1000 accrued
+    client.pause_stream(&employer, &id);
+    env.ledger().with_mut(|l| l.timestamp += 200); // paused — does not accrue
+    client.cancel_stream(&employer, &id);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.status, StreamStatus::Cancelled);
+    assert_eq!(s.withdrawn, 1000); // only 100s * 10
+}
