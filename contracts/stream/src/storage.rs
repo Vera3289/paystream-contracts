@@ -1,5 +1,5 @@
 use soroban_sdk::{Env, Address};
-use crate::types::{DataKey, Stream, StreamStatus, ERR_OVERFLOW};
+use crate::types::{DataKey, Stream, StreamStatus, ERR_OVERFLOW, ERR_RATE_LIMIT};
 
 /// Default minimum deposit (10_000 stroops = 0.001 XLM equivalent).
 pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
@@ -86,4 +86,64 @@ pub fn index_employer_stream(env: &Env, employer: &Address, stream_id: u64) {
 pub fn get_employer_streams(env: &Env, employer: &Address) -> Vec<u64> {
     let key = DataKey::EmployerStreams(employer.clone());
     env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env))
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+const DEFAULT_USER_LIMIT: u32 = 10;
+const DEFAULT_GLOBAL_LIMIT: u32 = 1000;
+const DEFAULT_WINDOW_SECS: u64 = 3600;
+
+pub fn is_rate_exempt(env: &Env, addr: &Address) -> bool {
+    env.storage().instance().get(&DataKey::RateLimitExempt(addr.clone())).unwrap_or(false)
+}
+
+pub fn set_rate_exempt(env: &Env, addr: &Address, exempt: bool) {
+    env.storage().instance().set(&DataKey::RateLimitExempt(addr.clone()), &exempt);
+}
+
+pub fn set_rate_limits(env: &Env, user_limit: u32, global_limit: u32, window_secs: u64) {
+    env.storage().instance().set(&DataKey::RateLimitUser, &user_limit);
+    env.storage().instance().set(&DataKey::RateLimitGlobal, &global_limit);
+    env.storage().instance().set(&DataKey::RateLimitWindow, &window_secs);
+}
+
+/// Check and increment both per-user and global counters.
+/// Resets counter when the current time is outside the previous window.
+/// Panics with E005 if either limit is exceeded.
+/// No-op if `caller` is exempt.
+pub fn check_and_bump_rate(env: &Env, caller: &Address) {
+    if is_rate_exempt(env, caller) {
+        return;
+    }
+
+    let now = env.ledger().timestamp();
+    let window: u64 = env.storage().instance().get(&DataKey::RateLimitWindow).unwrap_or(DEFAULT_WINDOW_SECS);
+    let user_limit: u32 = env.storage().instance().get(&DataKey::RateLimitUser).unwrap_or(DEFAULT_USER_LIMIT);
+    let global_limit: u32 = env.storage().instance().get(&DataKey::RateLimitGlobal).unwrap_or(DEFAULT_GLOBAL_LIMIT);
+
+    // Per-user check
+    let user_window: u64 = env.storage().instance().get(&DataKey::UserRateWindow(caller.clone())).unwrap_or(0);
+    let user_count: u32 = if now.saturating_sub(user_window) < window {
+        env.storage().instance().get(&DataKey::UserRateCount(caller.clone())).unwrap_or(0)
+    } else {
+        // New window — reset
+        env.storage().instance().set(&DataKey::UserRateWindow(caller.clone()), &now);
+        0
+    };
+    assert!(user_count < user_limit, "{}", ERR_RATE_LIMIT);
+    env.storage().instance().set(&DataKey::UserRateCount(caller.clone()), &(user_count + 1));
+
+    // Global check
+    let global_window: u64 = env.storage().instance().get(&DataKey::GlobalRateWindow).unwrap_or(0);
+    let global_count: u32 = if now.saturating_sub(global_window) < window {
+        env.storage().instance().get(&DataKey::GlobalRateCount).unwrap_or(0)
+    } else {
+        env.storage().instance().set(&DataKey::GlobalRateWindow, &now);
+        0
+    };
+    assert!(global_count < global_limit, "{}", ERR_RATE_LIMIT);
+    env.storage().instance().set(&DataKey::GlobalRateCount, &(global_count + 1));
 }

@@ -7,9 +7,11 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
-use types::{DataKey, Stream, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
+use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin,
+              check_and_bump_rate, set_rate_exempt, set_rate_limits,
+              get_employer_streams, index_employer_stream, set_min_deposit};
+use types::{DataKey, Stream, StreamParams, StreamStatus, ERR_REENTRANT, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE};
 
 #[contract]
 pub struct StreamContract;
@@ -43,6 +45,7 @@ impl StreamContract {
         // Issue #3: a zero rate produces a permanently stuck deposit because
         // claimable_amount would always return 0.  Reject it explicitly.
         assert!(rate_per_second > 0, "{}", ERR_ZERO_RATE);
+        check_and_bump_rate(&env, &employer);
 
         let now = env.ledger().timestamp();
         if stop_time > 0 {
@@ -97,6 +100,7 @@ impl StreamContract {
                 assert!(p.stop_time > now, "stop_time must be in the future");
             }
 
+            check_and_bump_rate(&env, &employer);
             let token_client = token::Client::new(&env, &p.token);
             token_client.balance(&employer); // SEP-41 probe
             token_client.transfer(&employer, &env.current_contract_address(), &p.deposit);
@@ -114,6 +118,7 @@ impl StreamContract {
                 stop_time: p.stop_time,
                 last_withdraw_time: now,
                 status: StreamStatus::Active,
+                locked: false,
             };
             save_stream(&env, &stream);
             events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second);
@@ -271,7 +276,7 @@ impl StreamContract {
     /// Useful for UI projections (future) and auditing (past).
     pub fn claimable_at(env: Env, stream_id: u64, timestamp: u64) -> i128 {
         let stream = load_stream(&env, stream_id).expect("stream not found");
-        storage_claimable_at(&stream, timestamp)
+        claimable_amount(&stream, timestamp)
     }
 
     /// Total streams created.
@@ -283,5 +288,30 @@ impl StreamContract {
     /// not the total stream count — backed by a per-employer index.
     pub fn streams_by_employer(env: Env, employer: Address) -> Vec<u64> {
         get_employer_streams(&env, &employer)
+    }
+
+    /// Admin: set the minimum deposit required to create a stream.
+    pub fn set_min_deposit(env: Env, admin: Address, amount: i128) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not the admin");
+        assert!(amount > 0, "amount must be positive");
+        set_min_deposit(&env, amount);
+    }
+
+    /// Admin: configure rate limit parameters.
+    /// `user_limit`   – max streams per employer per window (0 = keep current)
+    /// `global_limit` – max streams across all users per window (0 = keep current)
+    /// `window_secs`  – sliding window size in seconds (0 = keep current)
+    pub fn set_rate_limits(env: Env, admin: Address, user_limit: u32, global_limit: u32, window_secs: u64) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not the admin");
+        set_rate_limits(&env, user_limit, global_limit, window_secs);
+    }
+
+    /// Admin: exempt or un-exempt an address from rate limits (e.g., trusted partners).
+    pub fn set_rate_exempt(env: Env, admin: Address, addr: Address, exempt: bool) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not the admin");
+        set_rate_exempt(&env, &addr, exempt);
     }
 }

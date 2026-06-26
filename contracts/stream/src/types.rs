@@ -1,5 +1,16 @@
 use soroban_sdk::{contracttype, Address};
 
+/// Parameters for a single stream in a batch create call.
+#[contracttype]
+#[derive(Clone)]
+pub struct StreamParams {
+    pub employee: Address,
+    pub token: Address,
+    pub deposit: i128,
+    pub rate_per_second: i128,
+    pub stop_time: u64,
+}
+
 /// Status of a salary stream.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -42,8 +53,25 @@ pub enum DataKey {
     Stream(u64),
     StreamCount,
     Admin,
+    MinDeposit,
     /// Index: employer address → Vec<u64> of stream IDs they own.
     EmployerStreams(Address),
+    /// Per-user: (address, window_start_ledger) → stream count in window
+    UserRateCount(Address),
+    /// Per-user: ledger timestamp of the current window start
+    UserRateWindow(Address),
+    /// Global streams created in current window
+    GlobalRateCount,
+    /// Global window start timestamp
+    GlobalRateWindow,
+    /// Config: max streams per user per window (default 10)
+    RateLimitUser,
+    /// Config: max streams globally per window (default 1000)
+    RateLimitGlobal,
+    /// Config: window duration in seconds (default 3600)
+    RateLimitWindow,
+    /// Config: addresses exempt from rate limits
+    RateLimitExempt(Address),
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -59,3 +87,4 @@ pub const ERR_ZERO_RATE: &str = "E001: rate_per_second must be greater than zero
 pub const ERR_ZERO_DEPOSIT: &str = "E002: deposit must be positive";
 pub const ERR_REENTRANT: &str = "E003: reentrant withdraw detected";
 pub const ERR_OVERFLOW: &str = "E004: arithmetic overflow in claimable calculation";
+pub const ERR_RATE_LIMIT: &str = "E005: rate limit exceeded";

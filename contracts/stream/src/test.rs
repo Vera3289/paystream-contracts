@@ -385,3 +385,65 @@ fn test_create_stream_positive_rate_ok() {
     assert_eq!(id, 1);
     assert_eq!(client.get_stream(&id).rate_per_second, 1);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #506 – Rate limiting
+// ---------------------------------------------------------------------------
+
+/// Exceeding the per-user limit panics with E005.
+#[test]
+#[should_panic(expected = "E005")]
+fn test_user_rate_limit_exceeded() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // Set limit of 2 streams per hour per user
+    client.set_rate_limits(&admin, &2, &1000, &3600);
+
+    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0); // must panic
+}
+
+/// After window expires the counter resets and stream creation succeeds again.
+#[test]
+fn test_rate_limit_resets_after_window() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_rate_limits(&admin, &1, &1000, &3600);
+
+    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+    // Advance past window
+    env.ledger().with_mut(|l| l.timestamp += 3601);
+    // Should succeed — new window
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+    assert!(id > 0);
+}
+
+/// Exempt address bypasses rate limits.
+#[test]
+fn test_exempt_address_bypasses_rate_limit() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_rate_limits(&admin, &1, &1000, &3600);
+    client.set_rate_exempt(&admin, &employer, &true);
+
+    // Can exceed per-user limit because exempt
+    client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+    let id = client.create_stream(&employer, &employee, &token_id, &1000, &1, &0);
+    assert!(id > 0);
+}
