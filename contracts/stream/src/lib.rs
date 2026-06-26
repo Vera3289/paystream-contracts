@@ -106,6 +106,19 @@ impl StreamContract {
         events::contract_paused(&env, false);
     }
 
+    /// Emergency pause: no nonce required, for critical situations.
+    pub fn emergency_pause(env: Env, admin: Address) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        set_paused_cfg(&env, true);
+        events::contract_paused(&env, true);
+    }
+
+    /// Query whether the contract is currently paused (read-only).
+    pub fn is_paused(env: Env) -> bool {
+        storage::get_paused_cfg(&env)
+    }
+
     pub fn set_min_deposit(env: Env, admin: Address, nonce: u64, amount: i128) {
         admin.require_auth();
         require_admin(&env, &admin);
