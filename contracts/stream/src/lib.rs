@@ -4,6 +4,7 @@
 
 mod access_control;
 mod events;
+pub mod state_machine;
 pub mod storage;
 pub mod types;
 mod validate;
@@ -52,6 +53,7 @@ use types::{
     ERR_OP_EXPIRED, ERR_OP_ALREADY_EXECUTED, ERR_THRESHOLD_NOT_MET, ERR_OP_NOT_FOUND,
 };
 use validate::{validate_create_stream, validate_max_streams, validate_top_up, MAX_RATE_PER_SECOND};
+use state_machine::{require_transition, require_not_terminal};
 
 /// Warning thresholds in seconds (#121).
 const WARN_7_DAYS: u64 = 7 * 24 * 3600;
@@ -350,6 +352,7 @@ impl StreamContract {
         stream.withdrawn = stream.withdrawn.checked_add(amount).expect("withdrawn overflow");
         stream.last_withdraw_time = now;
         if stream.withdrawn >= stream.deposit {
+            require_transition(&StreamStatus::Active, &StreamStatus::Exhausted);
             stream.status = StreamStatus::Exhausted;
         }
 
@@ -371,6 +374,7 @@ impl StreamContract {
         assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
         assert!(stream.status != StreamStatus::Cancelled, "{}", ERR_STREAM_CANCELLED);
         assert!(stream.status != StreamStatus::Exhausted, "{}", ERR_STREAM_EXHAUSTED);
+        require_not_terminal(&stream.status);
 
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
@@ -385,6 +389,7 @@ impl StreamContract {
         assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
         assert!(stream.status != StreamStatus::Paused, "{}", ERR_ALREADY_PAUSED);
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
+        require_transition(&stream.status, &StreamStatus::Paused);
         let now = env.ledger().timestamp();
         stream.paused_at = now;
         stream.status = StreamStatus::Paused;
@@ -399,6 +404,7 @@ impl StreamContract {
         assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
         assert!(stream.status != StreamStatus::Active, "{}", ERR_NOT_PAUSED);
         assert_eq!(stream.status, StreamStatus::Paused, "stream not paused");
+        require_transition(&stream.status, &StreamStatus::Active);
         let now = env.ledger().timestamp();
         // Advance last_withdraw_time by the paused duration to exclude it while
         // preserving pre-pause accrued earnings.
@@ -418,6 +424,7 @@ impl StreamContract {
             stream.status == StreamStatus::Active || stream.status == StreamStatus::Paused,
             "stream already ended"
         );
+        require_transition(&stream.status, &StreamStatus::Cancelled);
 
         let now = env.ledger().timestamp();
         let claimable = claimable_amount(&stream, now);
