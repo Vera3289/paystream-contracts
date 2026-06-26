@@ -3,13 +3,15 @@
  * Centralizes error handling and provides consistent error responses
  */
 
+const logger = require('../services/logger');
+
 const errorHandler = (err, req, res, next) => {
-  console.error('Error:', {
+  const log = req.log || logger;
+  log.error('unhandled_error', {
     message: err.message,
     stack: err.stack,
     url: req.url,
     method: req.method,
-    timestamp: new Date().toISOString(),
   });
 
   // Default error response
