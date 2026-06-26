@@ -24,12 +24,13 @@ createBullBoard({
   serverAdapter,
 });
 
-const { loadSecrets } = require('./services/secretsService');
+const { loadConfiguration } = require('./config/environment');
 const { closePool } = require('./services/dbService');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const { versionHeader, deprecationWarning } = require('./middleware/versioning');
 const authRoutes = require('./routes/auth');
+const authAdminRoutes = require('./routes/auth-admin');
 const streamRoutes = require('./routes/streams');
 const tokenRoutes = require('./routes/tokens');
 const adminRoutes = require('./routes/admin');
@@ -363,6 +364,7 @@ app.post('/streams/:id/withdraw', (req, res) => {
 
 // Auth routes (public — no authMiddleware)
 app.use('/auth', authRoutes);
+app.use('/auth/admin', authAdminRoutes);
 
 // v1 API routes (current)
 app.use('/v1/api/streams', authMiddleware, streamRoutes);
@@ -436,7 +438,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function start() {
   try {
-    await loadSecrets();
+    await loadConfiguration();
 
     server = http.createServer(app);
     server.listen(PORT, () => {
