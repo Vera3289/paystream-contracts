@@ -158,6 +158,11 @@ pub enum DataKey {
     AllowedTokens,
     // Packed config (#272) — replaces individual MinDeposit/FeeBps/MaxStreamsPerEmployer/AdminNonce/Paused keys
     Config,
+    // Multisig admin (#499)
+    MultisigConfig,
+    AdminAction(u64),
+    AdminActionCount,
+    AdminVoted(u64, Address),
 }
 
 pub const ERR_ZERO_RATE: &str = "E001: rate_per_second must be greater than zero";
@@ -181,3 +186,50 @@ pub const ERR_ALREADY_PAUSED: &str = "E016: stream is already paused";
 pub const ERR_NOT_PAUSED: &str = "E017: stream is not paused";
 pub const ERR_TOKEN_NOT_ALLOWED: &str = "E018: token is not on the allowlist";
 pub const ERR_CLIFF_AFTER_STOP: &str = "E019: cliff time must be before or equal to stop time";
+pub const ERR_BELOW_THRESHOLD: &str = "E020: votes below required threshold";
+pub const ERR_ALREADY_VOTED_ADMIN: &str = "E021: already voted on this admin action";
+
+// ---------------------------------------------------------------------------
+// Multisig admin types (#499)
+// ---------------------------------------------------------------------------
+
+/// M-of-N multisig configuration for admin-level operations.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MultisigConfig {
+    pub signers: soroban_sdk::Vec<Address>,
+    pub threshold: u32,
+}
+
+/// Type of admin action that can be proposed via multisig.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdminActionType {
+    Pause,
+    Unpause,
+    UpgradeFee,
+    SetFee,
+}
+
+/// Status of an admin action proposal.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdminActionStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Executed,
+}
+
+/// An on-chain admin action proposal for multisig governance.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminAction {
+    pub id: u64,
+    pub action_type: AdminActionType,
+    pub param_value: u64,
+    pub votes_for: u32,
+    pub votes_against: u32,
+    pub status: AdminActionStatus,
+    pub executable_after: u64,
+}

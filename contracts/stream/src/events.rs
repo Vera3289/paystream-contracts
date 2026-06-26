@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use soroban_sdk::{Env, Address, symbol_short};
+use soroban_sdk::{Env, Address, BytesN, symbol_short};
+use crate::types::StreamStatus;
 
 pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address, rate: i128, fee_bps: u32) {
     env.events().publish((symbol_short!("created"), id), (employer.clone(), employee.clone(), rate, fee_bps));
-}
-
-pub fn stream_transferred(env: &Env, id: u64, previous_employee: &Address, new_employee: &Address) {
-    env.events().publish(
-        (symbol_short!("transferred"), id),
-        (previous_employee.clone(), new_employee.clone()),
-    );
 }
 
 pub fn stream_transferred(env: &Env, id: u64, previous_employee: &Address, new_employee: &Address) {
@@ -85,6 +79,15 @@ pub fn proposal_executed(env: &Env, id: u64) {
     env.events().publish((symbol_short!("propexec"), id), id);
 }
 
+/// Emitted when an admin action is proposed via multisig (#499).
+pub fn admin_action_proposed(env: &Env, id: u64) {
+    env.events().publish((symbol_short!("admprop"), id), id);
+}
+
+/// Emitted when an admin action is executed via multisig (#499).
+pub fn admin_action_executed(env: &Env, id: u64) {
+    env.events().publish((symbol_short!("admexec"), id), id);
+}
 pub fn global_paused(env: &Env, paused: bool) {
     env.events().publish(
         (symbol_short!("glb_pause"),),

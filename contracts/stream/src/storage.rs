@@ -27,8 +27,8 @@
 
 use soroban_sdk::{Env, Address, Vec};
 use crate::types::{
-    ContractConfig, DataKey, PauseEvent, Proposal, ProposalStatus, Stream, StreamStatus,
-    ERR_OVERFLOW, ERR_BAD_NONCE,
+    AdminAction, ContractConfig, DataKey, MultisigConfig, PauseEvent,
+    Proposal, ProposalStatus, Stream, StreamStatus, ERR_OVERFLOW, ERR_BAD_NONCE,
 };
 
 pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
@@ -378,4 +378,44 @@ pub fn remove_allowed_token(env: &Env, token: &Address) {
 
 pub fn get_allowed_tokens(env: &Env) -> Vec<Address> {
     env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(env))
+}
+
+// ---------------------------------------------------------------------------
+// Multisig admin helpers (#499)
+// ---------------------------------------------------------------------------
+
+pub fn get_multisig_config(env: &Env) -> Option<MultisigConfig> {
+    env.storage().instance().get(&DataKey::MultisigConfig)
+}
+
+pub fn set_multisig_config(env: &Env, cfg: &MultisigConfig) {
+    env.storage().instance().set(&DataKey::MultisigConfig, cfg);
+}
+
+pub fn next_admin_action_id(env: &Env) -> u64 {
+    let count: u64 = env.storage().instance().get(&DataKey::AdminActionCount).unwrap_or(0);
+    let next = count.checked_add(1).expect("admin action count overflow");
+    env.storage().instance().set(&DataKey::AdminActionCount, &next);
+    next
+}
+
+pub fn save_admin_action(env: &Env, action: &AdminAction) {
+    env.storage().persistent().set(&DataKey::AdminAction(action.id), action);
+}
+
+pub fn load_admin_action(env: &Env, id: u64) -> Option<AdminAction> {
+    env.storage().persistent().get(&DataKey::AdminAction(id))
+}
+
+pub fn has_admin_voted(env: &Env, action_id: u64, voter: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AdminVoted(action_id, voter.clone()))
+        .unwrap_or(false)
+}
+
+pub fn mark_admin_voted(env: &Env, action_id: u64, voter: &Address) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::AdminVoted(action_id, voter.clone()), &true);
 }

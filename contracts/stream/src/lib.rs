@@ -37,12 +37,17 @@ use storage::{
     get_allowed_tokens as storage_get_allowed_tokens,
     is_token_allowed,
     get_paused_cfg, set_paused_cfg,
+    get_multisig_config as storage_get_multisig_config, set_multisig_config,
+    next_admin_action_id, save_admin_action, load_admin_action,
+    has_admin_voted, mark_admin_voted,
 };
 use types::{
-    DataKey, GovParam, PauseEvent, Proposal, ProposalStatus, Stream, StreamParams, StreamStatus,
-    ERR_ALREADY_PAUSED, ERR_FEE_TOO_HIGH, ERR_INVALID_TOKEN, ERR_NOT_PAUSED, ERR_OVERFLOW,
-    ERR_REENTRANT, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED, ERR_TOKEN_NOT_ALLOWED,
-    ERR_UNAUTHORIZED_TRANSFER, ERR_WITHDRAW_COOLDOWN, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE,
+    AdminAction, AdminActionStatus, AdminActionType, DataKey, GovParam, MultisigConfig,
+    PauseEvent, Proposal, ProposalStatus, Stream, StreamParams, StreamStatus,
+    ERR_ALREADY_PAUSED, ERR_ALREADY_VOTED_ADMIN, ERR_BELOW_THRESHOLD, ERR_FEE_TOO_HIGH,
+    ERR_INVALID_TOKEN, ERR_NOT_PAUSED, ERR_OVERFLOW, ERR_REENTRANT, ERR_STREAM_CANCELLED,
+    ERR_STREAM_EXHAUSTED, ERR_TOKEN_NOT_ALLOWED, ERR_UNAUTHORIZED_TRANSFER,
+    ERR_WITHDRAW_COOLDOWN, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE,
 };
 use validate::{validate_create_stream, validate_max_streams, validate_top_up, MAX_RATE_PER_SECOND};
 
@@ -52,6 +57,9 @@ const WARN_1_DAY: u64 = 24 * 3600;
 
 /// Governance timelock: 2 days in seconds (#124).
 const GOV_TIMELOCK: u64 = 2 * 24 * 3600;
+
+/// Admin action timelock: 1 day in seconds (#499).
+const ADMIN_ACTION_TIMELOCK: u64 = 24 * 3600;
 
 /// Emit near_exhaustion warning if remaining funds are below 7-day or 1-day threshold (#121).
 fn maybe_warn_exhaustion(env: &Env, stream: &Stream) {
@@ -104,6 +112,19 @@ impl StreamContract {
         consume_admin_nonce(&env, nonce);
         set_paused_cfg(&env, false);
         events::contract_paused(&env, false);
+    }
+
+    /// Emergency pause: no nonce required, for critical situations.
+    pub fn emergency_pause(env: Env, admin: Address) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        set_paused_cfg(&env, true);
+        events::contract_paused(&env, true);
+    }
+
+    /// Query whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::get_paused_cfg(&env)
     }
 
     pub fn set_min_deposit(env: Env, admin: Address, nonce: u64, amount: i128) {
@@ -622,5 +643,93 @@ impl StreamContract {
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         load_proposal(&env, proposal_id).expect("proposal not found")
+    }
+
+    // ---------------------------------------------------------------------------
+    // Multisig admin (#499)
+    // ---------------------------------------------------------------------------
+
+    /// Configure M-of-N multisig for admin actions. Only the current admin can call this.
+    pub fn setup_multisig(env: Env, admin: Address, signers: Vec<Address>, threshold: u32) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        assert!(threshold > 0 && threshold as usize <= signers.len(), "invalid threshold");
+        let cfg = MultisigConfig { signers, threshold };
+        set_multisig_config(&env, &cfg);
+    }
+
+    /// Return the current multisig config, if set.
+    pub fn get_multisig_config(env: Env) -> Option<MultisigConfig> {
+        storage_get_multisig_config(&env)
+    }
+
+    /// Propose an admin action. Proposer must be a multisig signer.
+    pub fn propose_admin_action(
+        env: Env,
+        proposer: Address,
+        action_type: AdminActionType,
+        param_value: u64,
+    ) -> u64 {
+        proposer.require_auth();
+        let cfg = storage_get_multisig_config(&env).expect("multisig not configured");
+        assert!(cfg.signers.contains(&proposer), "not a multisig signer");
+        let id = next_admin_action_id(&env);
+        let now = env.ledger().timestamp();
+        let action = AdminAction {
+            id,
+            action_type,
+            param_value,
+            votes_for: 0,
+            votes_against: 0,
+            status: AdminActionStatus::Pending,
+            executable_after: now + ADMIN_ACTION_TIMELOCK,
+        };
+        save_admin_action(&env, &action);
+        events::admin_action_proposed(&env, id);
+        id
+    }
+
+    /// Vote on a pending admin action. Voter must be a multisig signer; no double votes.
+    pub fn vote_admin_action(env: Env, voter: Address, action_id: u64, support: bool) {
+        voter.require_auth();
+        let cfg = storage_get_multisig_config(&env).expect("multisig not configured");
+        assert!(cfg.signers.contains(&voter), "not a multisig signer");
+        let mut action = load_admin_action(&env, action_id).expect("action not found");
+        assert_eq!(action.status, AdminActionStatus::Pending, "action not pending");
+        assert!(!has_admin_voted(&env, action_id, &voter), "{}", ERR_ALREADY_VOTED_ADMIN);
+        mark_admin_voted(&env, action_id, &voter);
+        if support { action.votes_for += 1; } else { action.votes_against += 1; }
+        if action.votes_for >= cfg.threshold {
+            action.status = AdminActionStatus::Approved;
+        } else if action.votes_against > cfg.signers.len() as u32 - cfg.threshold {
+            action.status = AdminActionStatus::Rejected;
+        }
+        save_admin_action(&env, &action);
+    }
+
+    /// Execute an approved admin action after the timelock has elapsed.
+    pub fn execute_admin_action(env: Env, executor: Address, action_id: u64) {
+        executor.require_auth();
+        let cfg = storage_get_multisig_config(&env).expect("multisig not configured");
+        assert!(cfg.signers.contains(&executor), "not a multisig signer");
+        let mut action = load_admin_action(&env, action_id).expect("action not found");
+        assert_eq!(action.status, AdminActionStatus::Approved, "{}", ERR_BELOW_THRESHOLD);
+        let now = env.ledger().timestamp();
+        assert!(now >= action.executable_after, "timelock not elapsed");
+        match action.action_type {
+            AdminActionType::Pause => set_paused_cfg(&env, true),
+            AdminActionType::Unpause => set_paused_cfg(&env, false),
+            AdminActionType::SetFee | AdminActionType::UpgradeFee => {
+                set_fee_bps(&env, action.param_value as u32);
+            }
+        }
+        action.status = AdminActionStatus::Executed;
+        save_admin_action(&env, &action);
+        events::admin_action_executed(&env, action_id);
+    }
+
+    /// Get an admin action by ID.
+    pub fn get_admin_action(env: Env, action_id: u64) -> AdminAction {
+        load_admin_action(&env, action_id).expect("action not found")
     }
 }
