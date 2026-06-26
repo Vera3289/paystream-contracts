@@ -72,7 +72,7 @@ impl StreamContract {
         };
         save_stream(&env, &stream);
         index_employer_stream(&env, &employer, id);
-        events::stream_created(&env, id, &employer, &employee, rate_per_second);
+        events::stream_created(&env, id, &employer, &employee, rate_per_second, deposit, &token_address, stop_time);
         id
     }
 
@@ -116,7 +116,7 @@ impl StreamContract {
                 status: StreamStatus::Active,
             };
             save_stream(&env, &stream);
-            events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second);
+            events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second, p.deposit, &p.token, p.stop_time);
             ids.push_back(id);
         }
 
@@ -168,7 +168,7 @@ impl StreamContract {
         // Release guard and persist final state
         stream.locked = false;
         save_stream(&env, &stream);
-        events::withdrawn(&env, stream_id, &employee, amount);
+        events::withdrawn(&env, stream_id, &employee, amount, stream.withdrawn);
         amount
     }
 
@@ -191,7 +191,7 @@ impl StreamContract {
             stream.status = StreamStatus::Active;
         }
         save_stream(&env, &stream);
-        events::topped_up(&env, stream_id, &employer, amount);
+        events::topped_up(&env, stream_id, &employer, amount, stream.deposit);
     }
 
     /// Employer pauses an active stream.
@@ -202,7 +202,7 @@ impl StreamContract {
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
         stream.status = StreamStatus::Paused;
         save_stream(&env, &stream);
-        events::stream_status_changed(&env, stream_id, &StreamStatus::Paused);
+        events::stream_paused(&env, stream_id, &employer);
     }
 
     /// Employer resumes a paused stream.
@@ -215,7 +215,7 @@ impl StreamContract {
         stream.last_withdraw_time = env.ledger().timestamp();
         stream.status = StreamStatus::Active;
         save_stream(&env, &stream);
-        events::stream_status_changed(&env, stream_id, &StreamStatus::Active);
+        events::stream_resumed(&env, stream_id, &employer);
     }
 
     /// Employer cancels a stream and reclaims unstreamed funds.
@@ -253,7 +253,7 @@ impl StreamContract {
 
         stream.status = StreamStatus::Cancelled;
         save_stream(&env, &stream);
-        events::stream_status_changed(&env, stream_id, &StreamStatus::Cancelled);
+        events::stream_cancelled(&env, stream_id, &employer, claimable, refund);
     }
 
     /// Read a stream by ID.
