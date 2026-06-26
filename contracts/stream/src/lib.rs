@@ -2,6 +2,7 @@
 
 #![no_std]
 
+mod balance;
 mod events;
 mod storage;
 mod types;
@@ -12,9 +13,10 @@ mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use storage::{
-    claimable_amount, consume_admin_nonce, get_admin, get_admin_nonce, get_employee_streams,
-    get_employer_streams, get_min_deposit, index_employee_stream, index_employer_stream,
-    load_stream, next_id, save_stream, set_admin, set_min_deposit, transfer_employee_stream,
+    claimable_amount, clear_pending_admin, consume_admin_nonce, get_admin, get_admin_nonce,
+    get_employee_streams, get_employer_streams, get_min_deposit, get_pending_admin,
+    index_employee_stream, index_employer_stream, load_stream, next_id, save_stream, set_admin,
+    set_min_deposit, set_pending_admin, transfer_employee_stream,
 };
 use types::{
     DataKey, Stream, StreamParams, StreamStatus, ERR_REENTRANT, ERR_STREAM_CANCELLED,
@@ -545,6 +547,24 @@ impl StreamContract {
     pub fn claimable_at(env: Env, stream_id: u64, timestamp: u64) -> i128 {
         let stream = load_stream(&env, stream_id).expect("stream not found");
         claimable_amount(&stream, timestamp)
+    }
+
+    /// Full balance snapshot: claimable, vested, unvested, withdrawn, remaining
+    /// deposit and remaining stream duration — all in one call.
+    ///
+    /// Accounts for paused state and hard stop time. Uses current ledger time.
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream
+    ///
+    /// # Returns
+    /// [`balance::BalanceSnapshot`] struct.
+    ///
+    /// # Errors
+    /// - Panics if stream not found
+    pub fn balance_snapshot(env: Env, stream_id: u64) -> balance::BalanceSnapshot {
+        let stream = load_stream(&env, stream_id).expect("stream not found");
+        balance::balance_snapshot(&stream, env.ledger().timestamp())
     }
 
     /// Admin upgrades the contract WASM in-place.
