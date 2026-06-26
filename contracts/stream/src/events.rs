@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use soroban_sdk::{Env, Address, symbol_short};
+use soroban_sdk::{Env, Address, BytesN, symbol_short};
+use crate::types::StreamStatus;
 
 pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address, rate: i128, fee_bps: u32) {
     env.events().publish((symbol_short!("created"), id), (employer.clone(), employee.clone(), rate, fee_bps));
@@ -8,20 +9,21 @@ pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address
 
 pub fn stream_transferred(env: &Env, id: u64, previous_employee: &Address, new_employee: &Address) {
     env.events().publish(
-        (symbol_short!("transferred"), id),
-        (previous_employee.clone(), new_employee.clone()),
-    );
-}
-
-pub fn stream_transferred(env: &Env, id: u64, previous_employee: &Address, new_employee: &Address) {
-    env.events().publish(
-        (symbol_short!("transferred"), id),
+        (symbol_short!("transf"), id),
         (previous_employee.clone(), new_employee.clone()),
     );
 }
 
 pub fn withdrawn(env: &Env, id: u64, employee: &Address, amount: i128) {
     env.events().publish((symbol_short!("withdraw"), id), (employee.clone(), amount));
+}
+
+pub fn protocol_fee_collected(env: &Env, id: u64, fee_amount: i128, recipient: &Address) {
+    env.events().publish((symbol_short!("fee_col"), id), (fee_amount, recipient.clone()));
+}
+
+pub fn protocol_fees_withdrawn(env: &Env, token: &Address, amount: i128, recipient: &Address) {
+    env.events().publish((symbol_short!("fee_wdr"),), (token.clone(), amount, recipient.clone()));
 }
 
 pub fn stream_status_changed(env: &Env, id: u64, status: &StreamStatus) {

@@ -149,7 +149,7 @@ impl TokenContract {
     /// - Panics if minting would exceed `MAX_SUPPLY`
     pub fn mint(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
-        require_admin_or_minter(&env, &caller);
+        Self::require_admin_or_minter(&env, &caller);
         assert!(amount > 0, "amount must be positive");
         let current_supply = total_supply(&env);
         let new_supply = current_supply
