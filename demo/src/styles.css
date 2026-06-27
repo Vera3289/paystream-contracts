@@ -1455,3 +1455,24 @@ code {
 .wizard-skip {
   margin-right: auto;
 }
+
+/* ── Pause/Resume controls (#479) ── */
+.pause-resume-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.error-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  margin-bottom: 12px;
+}
