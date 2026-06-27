@@ -1,0 +1,30 @@
+# Gitleaks configuration for PayStream
+# https://github.com/gitleaks/gitleaks
+
+title = "PayStream secret scanning"
+
+[[rules]]
+id = "stellar-secret-key"
+description = "Stellar secret key (S...)"
+regex = '''S[A-Z2-7]{55}'''
+tags = ["stellar", "key"]
+
+[[rules]]
+id = "stellar-horizon-jwt"
+description = "Stellar Horizon JWT or bearer token in config"
+regex = '''(?i)(horizon[_-]?jwt|bearer)["\s:=]+[A-Za-z0-9\-_\.]{20,}'''
+tags = ["stellar", "token"]
+
+[allowlist]
+description = "Ignore test fixtures and example placeholders"
+regexes = [
+    # Canonical all-zero or placeholder keys used in tests/docs
+    '''SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA''',
+    '''YOUR_SECRET_KEY''',
+    '''<YOUR_SECRET''',
+]
+paths = [
+    '''(^|/)test''',
+    '''(^|/)examples/''',
+    '''\.md$''',
+]
