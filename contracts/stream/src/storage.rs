@@ -27,11 +27,11 @@
 
 use soroban_sdk::{Env, Address, Vec};
 use crate::types::{
-    ContractConfig, DataKey, PauseEvent, Proposal, ProposalStatus, Stream, StreamStatus,
-    ERR_OVERFLOW, ERR_BAD_NONCE,
+    AdminAction, ContractConfig, DataKey, MultisigConfig, PauseEvent,
+    Proposal, ProposalStatus, Stream, StreamStatus, ERR_OVERFLOW, ERR_BAD_NONCE,
 };
 
-pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
+pub const DEFAULT_MIN_DEPOSIT: i128 = 0;
 /// Default max active streams per employer.
 pub const DEFAULT_STREAM_LIMIT: u32 = 1000;
 /// Upgrade timelock: 48 hours in seconds.
@@ -158,6 +158,19 @@ pub fn get_fee_recipient(env: &Env) -> Option<Address> {
 
 pub fn set_fee_recipient(env: &Env, recipient: &Address) {
     env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+}
+
+pub fn get_fee_balance(env: &Env, token: &Address) -> i128 {
+    env.storage().instance().get(&DataKey::FeeBalance(token.clone())).unwrap_or(0)
+}
+
+pub fn set_fee_balance(env: &Env, token: &Address, amount: i128) {
+    env.storage().instance().set(&DataKey::FeeBalance(token.clone()), &amount);
+}
+
+pub fn add_fee_balance(env: &Env, token: &Address, amount: i128) {
+    let current = get_fee_balance(env, token);
+    set_fee_balance(env, token, current.checked_add(amount).unwrap_or(current));
 }
 
 pub fn get_max_streams_per_employer(env: &Env) -> u32 {

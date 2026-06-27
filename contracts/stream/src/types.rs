@@ -2,6 +2,17 @@
 
 use soroban_sdk::{contracttype, Address};
 
+/// Parameters for a single stream in a batch create call.
+#[contracttype]
+#[derive(Clone)]
+pub struct StreamParams {
+    pub employee: Address,
+    pub token: Address,
+    pub deposit: i128,
+    pub rate_per_second: i128,
+    pub stop_time: u64,
+}
+
 /// Status of a salary stream.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -120,7 +131,7 @@ pub struct ContractConfig {
 impl ContractConfig {
     pub fn default() -> Self {
         ContractConfig {
-            min_deposit: 10_000,
+            min_deposit: 0,
             fee_bps: 0,
             max_streams: 100,
             admin_nonce: 0,
@@ -143,6 +154,7 @@ pub enum DataKey {
     PendingAdmin,
     FeeBps,
     FeeRecipient,
+    FeeBalance(Address),
     /// Pending employer for a two-step stream ownership transfer.
     PendingEmployer(u64),
     /// Maximum number of streams an employer can create.

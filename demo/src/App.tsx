@@ -108,7 +108,7 @@ function estimatedDuration(deposit: string, rate: string): string | null {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-type AppView = "demo" | "dashboard" | "employee" | "batch";
+type AppView = "demo" | "dashboard" | "employee" | "batch" | "detail";
 
 export default function App() {
   const [dark, toggleDark] = useDarkMode();
@@ -117,6 +117,42 @@ export default function App() {
   const { publicKey, streams, claimableAmounts, error, loading, connect, loadStream, createStream, withdraw } =
     usePayStream();
   const history = useTransactionHistory();
+
+  // Employer actions for stream detail page
+  const employer = useEmployerDashboard(publicKey);
+
+  // Detail view state
+  const [detailStreamId, setDetailStreamId] = useState<bigint | null>(null);
+
+  // ── Hash routing (#stream/{id}) ───────────────────────────────────────────
+  useEffect(() => {
+    const handleHash = async () => {
+      const hash = window.location.hash;
+      const match = hash.match(/^#stream\/(\d+)$/);
+      if (match) {
+        const id = BigInt(match[1]);
+        setDetailStreamId(id);
+        setView("detail");
+        // Ensure the stream is loaded
+        const already = streams.find((s) => s.id === id);
+        if (!already) await loadStream(id);
+      }
+    };
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+    return () => window.removeEventListener("hashchange", handleHash);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const navigateToDetail = (streamId: bigint) => {
+    window.location.hash = `#stream/${streamId}`;
+  };
+
+  const navigateBack = () => {
+    window.location.hash = "";
+    setView("demo");
+    setDetailStreamId(null);
+  };
 
   // Wallet modal state
   const [walletModalOpen, setWalletModalOpen] = useState(false);
@@ -279,7 +315,20 @@ export default function App() {
       )}
       {/* ── Header ── */}
       <header className="app-header" role="banner">
-        <h1>💸 PayStream Demo</h1>
+        <div className="header-left">
+          <h1>💸 PayStream Demo</h1>
+          <button
+            className="hamburger-btn"
+            aria-label={navOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={navOpen}
+            aria-controls="main-nav"
+            onClick={() => setNavOpen((o) => !o)}
+          >
+            <span className="hamburger-bar" />
+            <span className="hamburger-bar" />
+            <span className="hamburger-bar" />
+          </button>
+        </div>
         <div className="header-right">
           <p className="subtitle">Testnet — real-time salary streaming on Stellar</p>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
@@ -309,15 +358,20 @@ export default function App() {
         error={error}
       />
 
+      {/* ── Nav overlay ── */}
+      {navOpen && (
+        <div className="nav-overlay" aria-hidden="true" onClick={() => setNavOpen(false)} />
+      )}
+
       {/* ── View tabs ── */}
-      <nav className="view-tabs" role="tablist" aria-label="Application views">
+      <nav id="main-nav" className={`view-tabs${navOpen ? " mobile-nav-open" : ""}`} role="tablist" aria-label="Application views">
         <button
           role="tab"
           id="tab-demo"
           aria-selected={view === "demo"}
           aria-controls="panel-demo"
           className={`tab-btn${view === "demo" ? " tab-active" : ""}`}
-          onClick={() => setView("demo")}
+          onClick={() => { setView("demo"); setNavOpen(false); }}
           onKeyDown={(e) => handleTabKeyDown(e, "demo")}
         >
           🖥 Stream Demo
@@ -328,7 +382,7 @@ export default function App() {
           aria-selected={view === "dashboard"}
           aria-controls="panel-dashboard"
           className={`tab-btn${view === "dashboard" ? " tab-active" : ""}`}
-          onClick={() => setView("dashboard")}
+          onClick={() => { setView("dashboard"); setNavOpen(false); }}
           onKeyDown={(e) => handleTabKeyDown(e, "dashboard")}
         >
           💼 Employer Dashboard
@@ -339,7 +393,7 @@ export default function App() {
           aria-selected={view === "employee"}
           aria-controls="panel-employee"
           className={`tab-btn${view === "employee" ? " tab-active" : ""}`}
-          onClick={() => setView("employee")}
+          onClick={() => { setView("employee"); setNavOpen(false); }}
           onKeyDown={(e) => handleTabKeyDown(e, "employee")}
         >
           💳 Employee Earnings
@@ -350,11 +404,43 @@ export default function App() {
           aria-selected={view === "batch"}
           aria-controls="panel-batch"
           className={`tab-btn${view === "batch" ? " tab-active" : ""}`}
-          onClick={() => setView("batch")}
+          onClick={() => { setView("batch"); setNavOpen(false); }}
         >
           📋 Batch Create
         </button>
       </nav>
+
+      {/* ── Stream Detail panel ── */}
+      {view === "detail" && detailStreamId !== null && (() => {
+        const detailStream = streams.find((s) => s.id === detailStreamId);
+        if (!detailStream) return (
+          <main style={{ padding: 24 }}>
+            <button className="btn btn-secondary" onClick={navigateBack}>← Back</button>
+            <p style={{ marginTop: 16 }}>
+              {loading ? "Loading stream…" : `Stream #${detailStreamId} not found.`}
+            </p>
+          </main>
+        );
+        const key = detailStreamId.toString();
+        const claimable = claimableAmounts[key] ?? 0n;
+        return (
+          <ErrorBoundary label="Stream Detail">
+            <StreamDetailPage
+              stream={detailStream}
+              claimable={claimable}
+              publicKey={publicKey}
+              onBack={navigateBack}
+              onWithdraw={withdraw ? (id) => withdraw(id) : undefined}
+              onPause={(id) => employer.handleAction("pause", id)}
+              onResume={(id) => employer.handleAction("resume", id)}
+              onCancel={(id) => employer.handleAction("cancel", id)}
+              onTopUp={employer.handleTopUp}
+              loading={loading || employer.loading}
+              actionLoading={employer.actionLoading}
+            />
+          </ErrorBoundary>
+        );
+      })()}
 
       {/* ── Batch Create panel ── */}
       <div
@@ -559,6 +645,15 @@ export default function App() {
                       onExportCsv={() => handleExportCsv(s.id)}
                       loading={loading}
                     >
+                      <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)" }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => navigateToDetail(s.id)}
+                          aria-label={`View full details for stream ${key}`}
+                        >
+                          🔍 View Detail
+                        </button>
+                      </div>
                       {/* Inline history panel */}
                       {historyStreamId === s.id && (
                         <div
