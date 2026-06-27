@@ -1,0 +1,82 @@
+name: Deployment Rollback (#513)
+
+on:
+  workflow_dispatch:
+    inputs:
+      active_slot:
+        description: "Currently active slot (blue or green)"
+        required: true
+        type: choice
+        options: [blue, green]
+      prev_image_tag:
+        description: "Image tag to roll back to"
+        required: true
+      dry_run:
+        description: "Dry run (no actual changes)"
+        type: boolean
+        default: false
+
+  # Automatic trigger: called by deploy workflow on health-check failure
+  workflow_call:
+    inputs:
+      active_slot:
+        required: true
+        type: string
+      prev_image_tag:
+        required: true
+        type: string
+      dry_run:
+        type: boolean
+        default: false
+
+jobs:
+  rollback:
+    name: Rollback (${{ inputs.active_slot }} → opposite slot)
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: blue-green-deploy
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          slot="${{ inputs.active_slot }}"
+          if [[ "$slot" != "blue" && "$slot" != "green" ]]; then
+            echo "::error::Invalid active_slot: $slot" && exit 1
+          fi
+          if [[ -z "${{ inputs.prev_image_tag }}" ]]; then
+            echo "::error::prev_image_tag is required" && exit 1
+          fi
+
+      - name: Run rollback script
+        env:
+          ACTIVE_SLOT: ${{ inputs.active_slot }}
+          PREV_IMAGE_TAG: ${{ inputs.prev_image_tag }}
+          HEALTH_URL: ${{ secrets.HEALTH_URL }}
+          HEALTH_RETRIES: "12"
+          HEALTH_INTERVAL: "5"
+          DEPLOY_HISTORY: deployment-history.json
+          NOTIFICATION_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          FLAGS=""
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            FLAGS="--dry-run"
+          fi
+          bash scripts/deploy-rollback.sh $FLAGS
+
+      - name: Upload deployment history
+        if: success() && inputs.dry_run == false
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-history
+          path: deployment-history.json
+          if-no-files-found: ignore
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Rollback failed for slot=${{ inputs.active_slot }} image=${{ inputs.prev_image_tag }}"
+          echo "::error::Manual intervention required — check deployment-history.json and health endpoints."

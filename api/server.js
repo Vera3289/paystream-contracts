@@ -27,6 +27,7 @@ createBullBoard({
 const { loadSecrets } = require('./services/secretsService');
 const { closePool } = require('./services/dbService');
 const authMiddleware = require('./middleware/auth');
+const { globalLimiter, perUserLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
 const { versionHeader, deprecationWarning } = require('./middleware/versioning');
 const authRoutes = require('./routes/auth');
@@ -35,7 +36,7 @@ const tokenRoutes = require('./routes/tokens');
 const adminRoutes = require('./routes/admin');
 const governanceRoutes = require('./routes/governance');
 const userRoutes = require('./routes/users');
-const apiKeyRoutes = require('./routes/apiKeys');
+const streamTemplateRoutes = require('./routes/streamTemplates');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -128,17 +129,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-  message: {
-    error: 'Too many requests from this IP, please try again later.',
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
+// Rate limiting — global (10k req/min) applied to all routes
+app.use(globalLimiter);
 
 // Logging
 if (process.env.NODE_ENV !== 'test') {
@@ -365,22 +357,22 @@ app.post('/streams/:id/withdraw', (req, res) => {
 // Auth routes (public — no authMiddleware)
 app.use('/auth', authRoutes);
 
-// API key management
-app.use('/v1/api/api-keys', authMiddleware, apiKeyRoutes);
+// Stream template routes
+app.use('/v1/api/stream-templates', authMiddleware, streamTemplateRoutes);
 
 // v1 API routes (current)
-app.use('/v1/api/streams', authMiddleware, streamRoutes);
-app.use('/v1/api/tokens', authMiddleware, tokenRoutes);
-app.use('/v1/api/admin', authMiddleware, adminRoutes);
-app.use('/v1/api/governance', authMiddleware, governanceRoutes);
-app.use('/v1/users', authMiddleware, userRoutes);
+app.use('/v1/api/streams', authMiddleware, perUserLimiter, streamRoutes);
+app.use('/v1/api/tokens', authMiddleware, perUserLimiter, tokenRoutes);
+app.use('/v1/api/admin', authMiddleware, perUserLimiter, adminRoutes);
+app.use('/v1/api/governance', authMiddleware, perUserLimiter, governanceRoutes);
+app.use('/v1/users', authMiddleware, perUserLimiter, userRoutes);
 
 // Legacy unversioned routes (deprecated)
-app.use('/api/streams', deprecationWarning, authMiddleware, streamRoutes);
-app.use('/api/tokens', deprecationWarning, authMiddleware, tokenRoutes);
-app.use('/api/admin', deprecationWarning, authMiddleware, adminRoutes);
-app.use('/api/governance', deprecationWarning, authMiddleware, governanceRoutes);
-app.use('/users', deprecationWarning, authMiddleware, userRoutes);
+app.use('/api/streams', deprecationWarning, authMiddleware, perUserLimiter, streamRoutes);
+app.use('/api/tokens', deprecationWarning, authMiddleware, perUserLimiter, tokenRoutes);
+app.use('/api/admin', deprecationWarning, authMiddleware, perUserLimiter, adminRoutes);
+app.use('/api/governance', deprecationWarning, authMiddleware, perUserLimiter, governanceRoutes);
+app.use('/users', deprecationWarning, authMiddleware, perUserLimiter, userRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -459,3 +451,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+// .

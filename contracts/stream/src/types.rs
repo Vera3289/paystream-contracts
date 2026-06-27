@@ -2,6 +2,17 @@
 
 use soroban_sdk::{contracttype, Address};
 
+/// Parameters for a single stream in a batch create call.
+#[contracttype]
+#[derive(Clone)]
+pub struct StreamParams {
+    pub employee: Address,
+    pub token: Address,
+    pub deposit: i128,
+    pub rate_per_second: i128,
+    pub stop_time: u64,
+}
+
 /// Status of a salary stream.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
