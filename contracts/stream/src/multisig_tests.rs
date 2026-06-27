@@ -264,8 +264,7 @@ fn test_multisig_2_of_3_explicit_auth_pause() {
         sub_invokes: &[],
     };
     env.mock_auths(&[
-        MockAuth { address: &signer1, invoke: &invoke },
-        MockAuth { address: &signer2, invoke: &invoke },
+        MockAuth { address: &multisig_employer, invoke: &invoke },
     ]);
 
     client.pause_stream(&multisig_employer, &stream_id);

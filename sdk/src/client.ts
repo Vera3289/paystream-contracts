@@ -156,6 +156,31 @@ export class PayStreamClient {
     return BigInt(scValToNative(val) as string | number);
   }
 
+  /**
+   * Helper to fetch a user's balance from a SEP-41 token contract.
+   */
+  async getTokenBalance(tokenAddress: string, userAddress: string): Promise<bigint> {
+    const tokenContract = new Contract(tokenAddress);
+    const account = await this.rpc.getAccount(
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+    );
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(tokenContract.call("balance", new Address(userAddress).toScVal()))
+      .setTimeout(TIMEOUT_SECONDS)
+      .build();
+
+    const simResult = await this.rpc.simulateTransaction(tx);
+    if (rpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+    const success = simResult as rpc.Api.SimulateTransactionSuccessResponse;
+    if (!success.result) throw new Error("No result from simulation");
+    return BigInt(scValToNative(success.result.retval) as string | number);
+  }
+
   // ─── mutating (return unsigned tx XDR) ──────────────────────────────────────
 
   /**
@@ -246,12 +271,16 @@ export class PayStreamClient {
   }
 
   /**
-   * Employee withdraws all claimable tokens. Returns unsigned transaction XDR.
+   * Employee withdraws claimable tokens. Pass `amount` to withdraw a partial
+   * amount, or omit / pass `0` to withdraw the full claimable balance.
+   * Returns unsigned transaction XDR.
    */
-  async withdraw(employee: string, streamId: bigint): Promise<string> {
+  async withdraw(employee: string, streamId: bigint, amount?: bigint): Promise<string> {
+    const amt = amount ?? 0n;
     return this.buildTx(employee, "withdraw", [
       new Address(employee).toScVal(),
       nativeToScVal(streamId, { type: "u64" }),
+      nativeToScVal(amt, { type: "i128" }),
     ]);
   }
 

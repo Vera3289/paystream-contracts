@@ -5,12 +5,17 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "jest"
+    "test": "jest",
+    "queue:start": "node queues/queue.js",
+    "queue:dashboard": "node queues/dashboard.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "ioredis": "^5.3.2",
-    "rate-limiter-flexible": "^2.3.9"
+    "rate-limiter-flexible": "^2.3.9",
+    "bullmq": "^1.86.0",
+    "@bull-board/api": "^4.0.0",
+    "@bull-board/express": "^4.0.0"
   },
   "devDependencies": {
     "jest": "^29.0.0",

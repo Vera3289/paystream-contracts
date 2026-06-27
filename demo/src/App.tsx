@@ -10,7 +10,11 @@ import { EmployerDashboard } from "./EmployerDashboard";
 import { EmployeeDashboard } from "./EmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
 import { BatchCreateStreams } from "./BatchCreateStreams";
+import { WalletButton } from "./WalletButton";
+import { WalletModal } from "./WalletModal";
+import { StreamCreationForm } from "./StreamCreationForm";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { OnboardingWizard, shouldShowOnboarding } from "./OnboardingWizard";
 
 const STROOP = 10_000_000n; // 1 XLM in stroops
 
@@ -109,7 +113,7 @@ type AppView = "demo" | "dashboard" | "employee" | "batch";
 export default function App() {
   const [dark, toggleDark] = useDarkMode();
   const [view, setView] = useState<AppView>("demo");
-  const [navOpen, setNavOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(() => shouldShowOnboarding());
   const { publicKey, streams, claimableAmounts, error, loading, connect, loadStream, createStream, withdraw } =
     usePayStream();
   const history = useTransactionHistory();
@@ -270,6 +274,9 @@ export default function App() {
 
   return (
     <div className="app-root" id="main-content">
+      {showOnboarding && (
+        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      )}
       {/* ── Header ── */}
       <header className="app-header" role="banner">
         <div className="header-left">

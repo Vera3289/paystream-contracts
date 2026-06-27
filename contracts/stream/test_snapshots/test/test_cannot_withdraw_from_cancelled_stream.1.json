@@ -134,7 +134,7 @@
     []
   ],
   "ledger": {
-    "protocol_version": 25,
+    "protocol_version": 26,
     "sequence_number": 0,
     "timestamp": 100,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -240,6 +240,12 @@
                     "val": {
                       "u64": "0"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "delegate"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

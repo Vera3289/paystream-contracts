@@ -1,0 +1,59 @@
+groups:
+  - name: paystream
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="paystream_api",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="paystream_api"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate on PayStream API"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: HighAPILatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="paystream_api"}[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency above 2s"
+          description: "p95 latency is {{ $value }}s."
+
+      - alert: StreamCreationAnomaly
+        expr: |
+          abs(
+            rate(paystream_streams_created_total[10m])
+            - avg_over_time(rate(paystream_streams_created_total[10m])[1h:10m])
+          ) > 3 * stddev_over_time(rate(paystream_streams_created_total[10m])[1h:10m])
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusual stream creation rate"
+          description: "Stream creation rate deviates significantly from the 1h baseline."
+
+      - alert: LowContractBalance
+        expr: paystream_contract_balance_xlm < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PayStream contract balance critically low"
+          description: "Contract balance is {{ $value }} XLM — top up to avoid service disruption."
+
+      - alert: IndexerDown
+        expr: up{job="contract_indexer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Contract indexer is down"
+          description: "The contract indexer has been unreachable for 2 minutes."

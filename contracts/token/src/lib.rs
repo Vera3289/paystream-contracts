@@ -149,7 +149,7 @@ impl TokenContract {
     /// - Panics if minting would exceed `MAX_SUPPLY`
     pub fn mint(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
-        require_admin_or_minter(&env, &caller);
+        Self::require_admin_or_minter(&env, &caller);
         assert!(amount > 0, "amount must be positive");
         let current_supply = total_supply(&env);
         let new_supply = current_supply
@@ -207,7 +207,7 @@ impl TokenContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
     fn setup() -> (Env, TokenContractClient<'static>) {
         let env = Env::default();
@@ -350,6 +350,7 @@ mod test {
     fn test_initialize_beyond_cap_fails() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin, &MAX_SUPPLY + 1);
+        client.initialize(&admin, &(MAX_SUPPLY + 1));
     }
 }
+

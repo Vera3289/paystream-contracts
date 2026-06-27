@@ -42,7 +42,7 @@ export function isValidStellarAddress(address: string): boolean {
   if (!address || typeof address !== "string") return false;
   try {
     // Check if it's a valid public key (starts with G) or contract ID (starts with C)
-    return StrKey.isValidEd25519PublicKey(address) || StrKey.isValidContractId(address);
+    return StrKey.isValidEd25519PublicKey(address) || StrKey.isValidContract(address);
   } catch {
     return false;
   }

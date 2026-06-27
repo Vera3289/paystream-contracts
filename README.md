@@ -6,9 +6,31 @@
 
 Soroban smart contracts for **PayStream** — decentralized payroll and salary streaming on the Stellar blockchain.
 
+## REST API
+
+The `api/` directory contains a Node.js/Express wrapper around the Soroban stream contracts.
+
+### Endpoints
+
+All responses follow the shape `{ success: boolean, data: object|null, error: string|null }`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/streams` | Create a new payment stream. Body: `{ sender, recipient, amount, duration }`. Stubs a `create_stream` contract call. |
+| `GET` | `/streams/:id` | Fetch current state of a stream by ID. Stubs a `get_stream` contract call. |
+| `POST` | `/streams/:id/withdraw` | Trigger a withdrawal from a stream. Body: `{ amount }`. Stubs a `withdraw` contract call. |
+
+### Running locally
+
+```bash
+cd api
+npm install
+npm start   # http://localhost:3001
+```
+
 PayStream lets employers stream salaries to employees in real-time, per-second. Instead of waiting for a monthly paycheck, employees earn and can withdraw their salary continuously as they work — fully on-chain, trustless, and transparent.
 
-> 🎬 **[Watch the demo](https://youtu.be/paystream-demo)** — see the full `create_stream → withdraw` flow in action.
+> 🎬 **[Watch the PayStream stream creation tutorial](docs/video-tutorial.md)** — under 10 minutes, includes wallet setup, create stream, withdraw, and captions.
 
 ---
 
@@ -146,6 +168,8 @@ The `cargo-cache` volume persists the Cargo registry between runs so subsequent 
 
 `create_streams_batch` is cheaper for N ≥ 2 because Stellar charges one base fee per transaction. Per-stream resource overhead grows linearly but is far smaller than the per-transaction base fee saved.
 
+**Gas optimizations in `create_streams_batch` (#286):** The token allowlist is read once before the loop (not once per stream), and the employer stream index is written once after the loop (not once per stream). For a batch of 10 streams this eliminates 18 redundant storage operations vs the naive implementation. See [`benchmarks/gas-optimization-report.md`](benchmarks/gas-optimization-report.md) for full details.
+
 ### Stream Status Lifecycle
 
 ```
@@ -252,3 +276,4 @@ See [SECURITY.md](SECURITY.md). Report vulnerabilities to `security@paystream.ex
 ---
 
 Built with ❤️ on Stellar
+.
