@@ -56,22 +56,31 @@ fn test_create_stream() {
 /// `deposit` and the contract balance increases by exactly `deposit`.
 #[test]
 fn test_create_stream_transfers_exact_deposit() {
-    let (env, client) = setup();
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(StreamContract, ());
+    let client = StreamContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     let employer = Address::generate(&env);
     let employee = Address::generate(&env);
     let token_id = setup_token(&env, &employer);
-    let token = paystream_token::TokenContractClient::new(&env, &token_id);
 
     let deposit: i128 = 5_000;
-    let employer_balance_before = token.balance(&employer);
+    let employer_balance_before = {
+        let token = paystream_token::TokenContractClient::new(&env, &token_id);
+        token.balance(&employer)
+    };
 
     client.initialize(&admin);
     client.set_min_deposit(&admin, &0, &100);
     client.create_stream(&employer, &employee, &token_id, &deposit, &1, &0, &0, &0);
 
     // Employer lost exactly `deposit` tokens.
-    assert_eq!(token.balance(&employer), employer_balance_before - deposit);
+    let employer_balance_after = {
+        let token = paystream_token::TokenContractClient::new(&env, &token_id);
+        token.balance(&employer)
+    };
+    assert_eq!(employer_balance_after, employer_balance_before - deposit);
     // Contract holds exactly `deposit` tokens.
     assert_eq!(token.balance(&client.address), deposit);
 }
@@ -150,30 +159,7 @@ fn test_transfer_stream_preserves_claimable() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    client.transfer_stream(&employee, &id, &new_employee);
-
-    let s = client.get_stream(&id);
-    assert_eq!(s.employee, new_employee);
-
-    env.ledger().with_mut(|l| l.timestamp += 100);
-    let withdrawn = client.withdraw(&new_employee, &id);
-    assert_eq!(withdrawn, 2000);
-}
-
-#[test]
-fn test_transfer_stream_preserves_claimable() {
-    let (env, client) = setup();
-    let admin = Address::generate(&env);
-    let employer = Address::generate(&env);
-    let employee = Address::generate(&env);
-    let new_employee = Address::generate(&env);
-    let token_id = setup_token(&env, &employer);
-
-    client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &0, &0);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.transfer_stream(&employee, &id, &new_employee);
@@ -516,7 +502,7 @@ fn test_claimable_overflow_panics() {
         paused_at: 0,
         locked: false,
         cliff_time: 0,
-        paused_at: 0,
+        delegate: None,
     };
 
     claimable_amount(&stream, 2);
@@ -547,7 +533,7 @@ fn test_claimable_large_elapsed_capped_by_deposit() {
         paused_at: 0,
         locked: false,
         cliff_time: 0,
-        paused_at: 0,
+        delegate: None,
     };
 
     let result = claimable_amount(&stream, u64::MAX);

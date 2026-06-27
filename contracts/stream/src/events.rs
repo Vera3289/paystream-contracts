@@ -18,6 +18,14 @@ pub fn withdrawn(env: &Env, id: u64, employee: &Address, amount: i128) {
     env.events().publish((symbol_short!("withdraw"), id), (employee.clone(), amount));
 }
 
+pub fn protocol_fee_collected(env: &Env, id: u64, fee_amount: i128, recipient: &Address) {
+    env.events().publish((symbol_short!("fee_col"), id), (fee_amount, recipient.clone()));
+}
+
+pub fn protocol_fees_withdrawn(env: &Env, token: &Address, amount: i128, recipient: &Address) {
+    env.events().publish((symbol_short!("fee_wdr"),), (token.clone(), amount, recipient.clone()));
+}
+
 pub fn stream_status_changed(env: &Env, id: u64, status: &StreamStatus) {
     env.events().publish((symbol_short!("status"), id), status.clone());
 }
