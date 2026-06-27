@@ -12,8 +12,14 @@ const jwt = require('jsonwebtoken');
 const { Keypair } = require('stellar-sdk');
 const { body, validationResult } = require('express-validator');
 const { JWT_SECRET } = require('../middleware/auth');
+const { createAuthRateLimiter, applyAuthFailure, resetAuthFailure } = require('../middleware/authRateLimiter');
 
 const router = express.Router();
+const authLimiter = createAuthRateLimiter({
+  maxAttempts: parseInt(process.env.AUTH_MAX_ATTEMPTS || '5', 10),
+  lockoutMs: parseInt(process.env.AUTH_LOCKOUT_MS || String(15 * 60 * 1000), 10),
+  baseDelayMs: parseInt(process.env.AUTH_BASE_DELAY_MS || '500', 10),
+});
 
 // In-memory nonce store: address -> { nonce, expiresAt }
 // In production replace with Redis or a DB-backed store.
@@ -65,6 +71,7 @@ setInterval(() => {
  */
 router.post(
   '/challenge',
+  authLimiter,
   [body('address').matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid Stellar address')],
   (req, res) => {
     const errors = validationResult(req);
@@ -125,6 +132,7 @@ router.post(
  */
 router.post(
   '/verify',
+  authLimiter,
   [
     body('address').matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid Stellar address'),
     body('signature').isHexadecimal().withMessage('Signature must be hex-encoded'),
@@ -140,6 +148,7 @@ router.post(
 
     if (!entry || Date.now() > entry.expiresAt) {
       nonceStore.delete(address);
+      applyAuthFailure(req);
       return res.status(401).json({ error: 'Nonce expired or not found. Request a new challenge.', code: 'NONCE_EXPIRED' });
     }
 
@@ -150,14 +159,17 @@ router.post(
       const sigBytes = Buffer.from(signature, 'hex');
       const valid = keypair.verify(nonceBytes, sigBytes);
       if (!valid) {
+        applyAuthFailure(req);
         return res.status(401).json({ error: 'Signature verification failed', code: 'INVALID_SIGNATURE' });
       }
     } catch {
+      applyAuthFailure(req);
       return res.status(401).json({ error: 'Signature verification failed', code: 'INVALID_SIGNATURE' });
     }
 
     // Consume nonce (one-time use)
     nonceStore.delete(address);
+    resetAuthFailure(req);
 
     const token = jwt.sign({ sub: address }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
     res.json({ token, expiresIn: JWT_EXPIRY });
