@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * JWT Authentication Middleware (#245)
+ * Authentication Middleware
  *
- * Validates Bearer JWT tokens issued by POST /auth/verify.
- * Falls back to X-API-Key for backward compatibility.
+ * 1. Bearer JWT (issued by POST /auth/verify)
+ * 2. X-API-Key — validated via apiKeyService (#594) with per-key rate limiting
  */
 
 const jwt = require('jsonwebtoken');
+const apiKeyService = require('../services/apiKeyService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'changeme-set-JWT_SECRET-in-env';
 
-/**
- * Verify a Bearer JWT token from the Authorization header.
- * Also accepts legacy X-API-Key for backward compatibility.
- */
 const authMiddleware = (req, res, next) => {
-  // 1. Try Bearer JWT
+  // 1. Bearer JWT
   const authHeader = req.header('Authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
@@ -24,22 +21,24 @@ const authMiddleware = (req, res, next) => {
       req.stellarAddress = payload.sub;
       return next();
     } catch (err) {
-      return res.status(401).json({
-        error: 'Invalid or expired JWT',
-        code: 'INVALID_JWT',
-      });
+      return res.status(401).json({ error: 'Invalid or expired JWT', code: 'INVALID_JWT' });
     }
   }
 
-  // 2. Legacy X-API-Key fallback
-  const apiKey = req.header('X-API-Key');
-  if (apiKey) {
-    const validApiKeys = process.env.API_KEYS ? process.env.API_KEYS.split(',') : [];
-    if (validApiKeys.includes(apiKey)) {
-      req.apiKey = apiKey;
-      return next();
+  // 2. X-API-Key — validated + per-key rate limit
+  const rawKey = req.header('X-API-Key');
+  if (rawKey) {
+    const meta = apiKeyService.validateKey(rawKey);
+    if (!meta) {
+      return res.status(401).json({ error: 'Invalid or revoked API key', code: 'INVALID_API_KEY' });
     }
-    return res.status(401).json({ error: 'Invalid API key', code: 'INVALID_API_KEY' });
+    const hash = apiKeyService.hashKey(rawKey);
+    if (!apiKeyService.checkRateLimit(hash)) {
+      return res.status(429).json({ error: 'API key rate limit exceeded', code: 'RATE_LIMIT_EXCEEDED' });
+    }
+    req.apiKey = rawKey;
+    req.apiKeyMeta = meta;
+    return next();
   }
 
   return res.status(401).json({
