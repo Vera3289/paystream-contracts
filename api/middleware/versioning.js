@@ -26,7 +26,7 @@ const deprecationWarning = (req, res, next) => {
   res.setHeader('X-API-Deprecated', 'true');
   res.setHeader(
     'X-API-Deprecation-Notice',
-    'This endpoint is deprecated. Migrate to /v1/ — see https://github.com/Vera3289/paystream-contracts/blob/main/docs/api-versioning.md'
+    'This endpoint is deprecated. Migrate to /v1/ - see https://github.com/Vera3289/paystream-contracts/blob/main/docs/api-versioning.md'
   );
   next();
 };

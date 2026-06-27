@@ -207,7 +207,7 @@ impl TokenContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
     fn setup() -> (Env, TokenContractClient<'static>) {
         let env = Env::default();
@@ -350,6 +350,7 @@ mod test {
     fn test_initialize_beyond_cap_fails() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin, &MAX_SUPPLY + 1);
+        client.initialize(&admin, &(MAX_SUPPLY + 1));
     }
 }
+

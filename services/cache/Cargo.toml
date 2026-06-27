@@ -1,0 +1,17 @@
+[package]
+name = "paystream-cache"
+version = "0.1.0"
+edition = "2021"
+description = "Redis caching layer for PayStream off-chain services"
+license = "Apache-2.0"
+
+[dependencies]
+redis = { version = "0.25.4", features = ["connection-manager", "tokio-comp"] }
+tokio = { version = "1.38.0", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = { version = "1.0.117" }
+tracing = { version = "0.1.40" }
+thiserror = { version = "1.0.61" }
+
+[dev-dependencies]
+tokio = { version = "1.38.0", features = ["rt", "macros"] }

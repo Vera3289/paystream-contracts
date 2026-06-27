@@ -4,8 +4,8 @@
 
 mod access_control;
 mod events;
-mod storage;
-mod types;
+pub mod storage;
+pub mod types;
 mod validate;
 
 #[cfg(test)]
@@ -16,6 +16,9 @@ mod auth_tests;
 
 #[cfg(test)]
 mod multisig_tests;
+
+#[cfg(test)]
+mod multisig_admin_tests;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use access_control::{
@@ -28,21 +31,25 @@ use storage::{
     consume_admin_nonce, get_admin, get_admin_nonce, get_employee_streams, get_employer_streams,
     get_fee_balance, get_fee_bps, get_fee_recipient, get_max_streams_per_employer, get_min_deposit,
     get_pause_history, get_pending_admin, get_pending_employer, has_voted, index_employee_stream,
-    index_employer_stream, load_proposal, load_stream, mark_voted, next_id, next_proposal_id,
-    save_proposal, save_stream, set_admin, set_fee_bps, set_fee_balance, set_fee_recipient,
-    set_max_streams_per_employer, set_min_deposit, set_pending_admin, set_pending_employer,
-    tally_proposal,
+    index_employer_stream, index_employer_streams_batch, load_proposal, load_stream, mark_voted,
+    next_id, next_proposal_id, save_proposal, save_stream, set_admin, set_fee_bps,
+    set_fee_recipient, set_max_streams_per_employer, set_min_deposit, set_pending_admin,
+    set_pending_employer, tally_proposal,
     add_allowed_token as storage_add_allowed_token,
     remove_allowed_token as storage_remove_allowed_token,
     get_allowed_tokens as storage_get_allowed_tokens,
     is_token_allowed,
     get_paused_cfg, set_paused_cfg,
+    get_multisig_config as storage_get_multisig_config, set_multisig_config, next_pending_op_id, save_pending_op, load_pending_op,
 };
 use types::{
     DataKey, GovParam, PauseEvent, Proposal, ProposalStatus, Stream, StreamParams, StreamStatus,
     ERR_ALREADY_PAUSED, ERR_FEE_TOO_HIGH, ERR_INVALID_TOKEN, ERR_NOT_PAUSED, ERR_OVERFLOW,
     ERR_REENTRANT, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED, ERR_TOKEN_NOT_ALLOWED,
     ERR_UNAUTHORIZED_TRANSFER, ERR_WITHDRAW_COOLDOWN, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE,
+    AdminOp, MultisigConfig, PendingAdminOp,
+    ERR_MULTISIG_NOT_CONFIGURED, ERR_NOT_MULTISIG_ADMIN, ERR_ALREADY_APPROVED,
+    ERR_OP_EXPIRED, ERR_OP_ALREADY_EXECUTED, ERR_THRESHOLD_NOT_MET, ERR_OP_NOT_FOUND,
 };
 use validate::{validate_create_stream, validate_max_streams, validate_top_up, MAX_RATE_PER_SECOND};
 
@@ -52,6 +59,9 @@ const WARN_1_DAY: u64 = 24 * 3600;
 
 /// Governance timelock: 2 days in seconds (#124).
 const GOV_TIMELOCK: u64 = 2 * 24 * 3600;
+
+/// Multi-sig pending operation TTL: 7 days in seconds (#275).
+const MULTISIG_OP_TTL: u64 = 7 * 24 * 3600;
 
 /// Emit near_exhaustion warning if remaining funds are below 7-day or 1-day threshold (#121).
 fn maybe_warn_exhaustion(env: &Env, stream: &Stream) {
@@ -250,12 +260,22 @@ impl StreamContract {
         let fee_bps = get_fee_bps(&env);
         let fee_recipient = get_fee_recipient(&env);
 
+        // Hoist allowed-tokens list read outside the loop (#286): one storage read
+        // instead of N reads for a batch of N streams.
+        let allowed_tokens = storage_get_allowed_tokens(&env);
+        let allowlist_active = !allowed_tokens.is_empty();
+
         for p in params.iter() {
             validate_create_stream(p.deposit, min_deposit, p.rate_per_second, p.stop_time, p.cliff_time, now, &employer, &p.employee);
 
+            // Token validation using pre-fetched allowlist — no extra storage read per stream.
+            if allowlist_active {
+                assert!(allowed_tokens.contains(&p.token), "{}", ERR_TOKEN_NOT_ALLOWED);
+            }
+
+            check_and_bump_rate(&env, &employer);
             let token_client = token::Client::new(&env, &p.token);
             let _ = token_client.try_balance(&employer).expect(ERR_INVALID_TOKEN);
-            assert!(is_token_allowed(&env, &p.token), "{}", ERR_TOKEN_NOT_ALLOWED);
             
             let (stream_fee_bps, net_deposit) = if fee_bps > 0 {
                 if let Some(ref recipient) = fee_recipient {
@@ -293,11 +313,15 @@ impl StreamContract {
                 delegate: None,
             };
             save_stream(&env, &stream);
-            index_employer_stream(&env, &employer, id);
             index_employee_stream(&env, &p.employee, id);
             events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second, stream_fee_bps);
             ids.push_back(id);
         }
+
+        // Batch employer index write: one read + one write for all N streams (#286)
+        // instead of N reads + N writes.
+        index_employer_streams_batch(&env, &employer, &ids);
+
         ids
     }
 
@@ -659,4 +683,98 @@ impl StreamContract {
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         load_proposal(&env, proposal_id).expect("proposal not found")
     }
+
+    // -----------------------------------------------------------------------
+    // Multi-sig admin (#275)
+    //
+    // Sensitive operations (upgrade, emergency_pause) require M-of-N admin
+    // signatures before execution.
+    //
+    // Flow:
+    //   1. Any admin calls `multisig_propose` → returns op_id
+    //   2. Each admin calls `multisig_approve(op_id)` — auto-executes at threshold
+    //   3. Pending ops expire after MULTISIG_OP_TTL seconds
+    // -----------------------------------------------------------------------
+
+    /// Configure M-of-N admin multi-sig.
+    /// Must be called by the current single admin before multi-sig is active.
+    pub fn configure_multisig(env: Env, caller: Address, admins: Vec<Address>, threshold: u32) {
+        caller.require_auth();
+        require_admin(&env, &caller);
+        assert!(threshold > 0, "threshold must be > 0");
+        assert!(
+            threshold <= admins.len() as u32,
+            "threshold cannot exceed number of admins"
+        );
+        set_multisig_config(&env, &MultisigConfig { admins, threshold });
+    }
+
+    /// Propose a sensitive admin operation. Returns the pending op ID.
+    /// Caller must be one of the configured multisig admins.
+    pub fn multisig_propose(env: Env, caller: Address, op: AdminOp) -> u64 {
+        caller.require_auth();
+        let cfg = storage_get_multisig_config(&env).expect(ERR_MULTISIG_NOT_CONFIGURED);
+        assert!(cfg.admins.contains(&caller), "{}", ERR_NOT_MULTISIG_ADMIN);
+
+        let id = next_pending_op_id(&env);
+        let now = env.ledger().timestamp();
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(caller);
+
+        let pending = PendingAdminOp {
+            id,
+            op,
+            approvals,
+            expires_at: now + MULTISIG_OP_TTL,
+            executed: false,
+        };
+        save_pending_op(&env, &pending);
+        id
+    }
+
+    /// Approve a pending admin operation. Executes automatically when threshold is met.
+    pub fn multisig_approve(env: Env, caller: Address, op_id: u64) {
+        caller.require_auth();
+        let cfg = storage_get_multisig_config(&env).expect(ERR_MULTISIG_NOT_CONFIGURED);
+        assert!(cfg.admins.contains(&caller), "{}", ERR_NOT_MULTISIG_ADMIN);
+
+        let mut pending = load_pending_op(&env, op_id).expect(ERR_OP_NOT_FOUND);
+        assert!(!pending.executed, "{}", ERR_OP_ALREADY_EXECUTED);
+        assert!(
+            env.ledger().timestamp() < pending.expires_at,
+            "{}",
+            ERR_OP_EXPIRED
+        );
+        assert!(!pending.approvals.contains(&caller), "{}", ERR_ALREADY_APPROVED);
+
+        pending.approvals.push_back(caller);
+
+        if pending.approvals.len() as u32 >= cfg.threshold {
+            // Execute the operation
+            match pending.op.clone() {
+                AdminOp::Upgrade(_hash) => {
+                    // Upgrade execution is handled off-chain via the hash;
+                    // mark executed so it cannot be replayed.
+                }
+                AdminOp::EmergencyPause => {
+                    set_paused_cfg(&env, true);
+                }
+            }
+            pending.executed = true;
+        }
+
+        save_pending_op(&env, &pending);
+    }
+
+    /// Read a pending admin operation.
+    pub fn get_pending_admin_op(env: Env, op_id: u64) -> PendingAdminOp {
+        load_pending_op(&env, op_id).expect(ERR_OP_NOT_FOUND)
+    }
+
+    /// Read the current multisig configuration.
+    pub fn get_multisig_config(env: Env) -> MultisigConfig {
+        storage_get_multisig_config(&env).expect(ERR_MULTISIG_NOT_CONFIGURED)
+    }
 }
+// .
+// ..

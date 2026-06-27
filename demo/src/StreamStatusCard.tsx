@@ -2,6 +2,7 @@
 import React from "react";
 import type { Stream } from "@paystream/sdk";
 import { StreamStatusBadge, StreamStatus } from "./StreamStatusBadge";
+import { useBalanceTicker } from "./useBalanceTicker";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
