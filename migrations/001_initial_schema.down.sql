@@ -1,0 +1,3 @@
+BEGIN;
+DROP TABLE IF EXISTS migration_history;
+COMMIT;
