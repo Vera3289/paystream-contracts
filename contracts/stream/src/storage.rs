@@ -27,8 +27,8 @@
 
 use soroban_sdk::{Env, Address, Vec};
 use crate::types::{
-    ContractConfig, DataKey, PauseEvent, Proposal, ProposalStatus, Stream, StreamStatus,
-    ERR_OVERFLOW, ERR_BAD_NONCE,
+    AdminAction, ContractConfig, DataKey, MultisigConfig, PauseEvent,
+    Proposal, ProposalStatus, Stream, StreamStatus, ERR_OVERFLOW, ERR_BAD_NONCE,
 };
 
 pub const DEFAULT_MIN_DEPOSIT: i128 = 0;

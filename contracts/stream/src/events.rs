@@ -87,6 +87,15 @@ pub fn proposal_executed(env: &Env, id: u64) {
     env.events().publish((symbol_short!("propexec"), id), id);
 }
 
+/// Emitted when an admin action is proposed via multisig (#499).
+pub fn admin_action_proposed(env: &Env, id: u64) {
+    env.events().publish((symbol_short!("admprop"), id), id);
+}
+
+/// Emitted when an admin action is executed via multisig (#499).
+pub fn admin_action_executed(env: &Env, id: u64) {
+    env.events().publish((symbol_short!("admexec"), id), id);
+}
 pub fn global_paused(env: &Env, paused: bool) {
     env.events().publish(
         (symbol_short!("glb_pause"),),
