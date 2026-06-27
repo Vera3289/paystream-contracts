@@ -11,6 +11,8 @@ require('dotenv').config();
 const compression = require('compression');
 const correlationId = require('./middleware/correlationId');
 const { apmMiddleware } = require('./middleware/apm');
+const requestLogger = require('./middleware/requestLogger');
+const logger = require('./services/logger');
 const metricsService = require('./services/metricsService');
 const { ExpressAdapter } = require('@bull-board/express');
 const { createBullBoard } = require('@bull-board/api');
@@ -44,6 +46,7 @@ const startedAt = new Date();
 
 morgan.token('correlation-id', (req) => req.correlationId || '-');
 app.use(correlationId);
+app.use(requestLogger);
 app.use(apmMiddleware);
 
 const logFormat = ':remote-addr :method :url :status :res[content-length] - :response-time ms :correlation-id';
@@ -112,14 +115,14 @@ app.use((req, res, next) => {
       const compressedSize = parseInt(res.getHeader('Content-Length') || '0', 10);
       if (compressedSize > 0) {
         const ratio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
-        console.log(`[compression] ${req.method} ${req.path} encoding=${encoding} original=${originalSize}B compressed=${compressedSize}B ratio=${ratio}%`);
+        logger.debug(`[compression] ${req.method} ${req.path} encoding=${encoding} original=${originalSize}B compressed=${compressedSize}B ratio=${ratio}%`);
         // Record in metrics (as a percent value)
         try {
           metricsService.observeCompressionRatio(parseFloat(ratio), { encoding, method: req.method, path: req.path });
           metricsService.incrementCompressed({ encoding, method: req.method, path: req.path });
         } catch (err) {
           // don't break response flow for metrics failures
-          console.error('[metrics] failed to record compression metric', err && err.message ? err.message : err);
+          logger.error('[metrics] failed to record compression metric', err && err.message ? err.message : err);
         }
       }
     }
@@ -407,22 +410,22 @@ async function shutdown(signal) {
     return;
   }
   isShuttingDown = true;
-  console.log(`[Shutdown] ${signal} received, stopping new connections and waiting up to 30s for in-flight requests`);
+  logger.info(`[Shutdown] ${signal} received, stopping new connections and waiting up to 30s for in-flight requests`);
 
   const forceExit = setTimeout(() => {
-    console.error('[Shutdown] Force exiting after 30 seconds');
+    logger.error('[Shutdown] Force exiting after 30 seconds');
     process.exit(1);
   }, 30000);
 
   try {
     await stopServer();
     await closePool();
-    console.log('[Shutdown] Database connection closed');
+    logger.info('[Shutdown] Database connection closed');
   } catch (err) {
-    console.error('[Shutdown] Error during graceful shutdown', err);
+    logger.error('[Shutdown] Error during graceful shutdown', err);
   } finally {
     clearTimeout(forceExit);
-    console.log('[Shutdown] Complete');
+    logger.info('[Shutdown] Complete');
     process.exit(0);
   }
 }
@@ -436,12 +439,12 @@ async function start() {
 
     server = http.createServer(app);
     server.listen(PORT, () => {
-      console.log(`PayStream REST API server running on port ${PORT}`);
-      console.log(`API documentation available at http://localhost:${PORT}/api-docs`);
-      console.log(`Health check available at http://localhost:${PORT}/health`);
+      logger.info(`PayStream REST API server running on port ${PORT}`);
+      logger.info(`API documentation available at http://localhost:${PORT}/api-docs`);
+      logger.info(`Health check available at http://localhost:${PORT}/health`);
     });
   } catch (error) {
-    console.error('[Startup] Failed to initialize API server', error);
+    logger.error('[Startup] Failed to initialize API server', error);
     process.exit(1);
   }
 }
