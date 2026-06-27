@@ -1,0 +1,74 @@
+# cargo-deny configuration
+# Docs: https://embarkstudios.github.io/cargo-deny/
+#
+# Run locally:  cargo deny check
+# CI:           see .github/workflows/license-check.yml
+
+[graph]
+# Check all targets, including wasm32-unknown-unknown
+targets = [
+    { triple = "wasm32-unknown-unknown" },
+    { triple = "x86_64-unknown-linux-gnu" },
+]
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+[licenses]
+# All crates must satisfy at least one of the licenses listed here.
+# Any crate whose license expression cannot be satisfied by this list will
+# cause `cargo deny check licenses` to fail.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+]
+
+# Warn (rather than error) when a license is in the allow list but unused.
+unused-allowed-license = "warn"
+
+# Minimum confidence threshold for license text detection (0.0–1.0).
+# 0.8 is the cargo-deny default; keep it explicit.
+confidence-threshold = 0.8
+
+# Dev-dependencies are not shipped in the final WASM artifact, but we still
+# check them to avoid accidentally pulling in a GPL crate during testing.
+include-dev = true
+
+# ---------------------------------------------------------------------------
+# Advisories  (vulnerability database)
+# ---------------------------------------------------------------------------
+[advisories]
+# Fetch the RustSec advisory database on every run.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+db-path = "~/.cargo/advisory-db"
+# Fail on any unignored vulnerability or unmaintained crate warning.
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+notice = "warn"
+
+# ---------------------------------------------------------------------------
+# Bans  (duplicate / forbidden crates)
+# ---------------------------------------------------------------------------
+[bans]
+# Deny multiple versions of the same crate to keep the dependency tree clean.
+multiple-versions = "warn"
+# Deny wildcard dependencies.
+wildcards = "deny"
+
+# ---------------------------------------------------------------------------
+# Sources  (allowed registries / git hosts)
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

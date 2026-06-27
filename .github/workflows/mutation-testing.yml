@@ -1,0 +1,108 @@
+name: Mutation Testing
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly, Monday 03:00 UTC
+  pull_request:
+    paths:
+      - 'contracts/stream/src/**'
+      - 'tests/mutation/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: cargo-mutants
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-mutants-
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Run mutation tests
+        id: mutants
+        run: |
+          bash tests/mutation/run_mutation_tests.sh 2>&1 | tee mutants-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Build PR comment
+        if: github.event_name == 'pull_request'
+        id: report
+        run: |
+          CAUGHT=0; MISSED=0; TIMEOUT=0
+          if [[ -f mutants.out/mutants.json ]]; then
+            CAUGHT=$(python3 -c "import json; d=json.load(open('mutants.out/mutants.json')); print(d.get('caught',0))" 2>/dev/null || echo 0)
+            MISSED=$(python3 -c "import json; d=json.load(open('mutants.out/mutants.json')); print(d.get('missed',0))" 2>/dev/null || echo 0)
+            TIMEOUT=$(python3 -c "import json; d=json.load(open('mutants.out/mutants.json')); print(d.get('timeout',0))" 2>/dev/null || echo 0)
+          fi
+          TOTAL=$(( CAUGHT + MISSED ))
+          KILL_RATE=0
+          [[ $TOTAL -gt 0 ]] && KILL_RATE=$(( CAUGHT * 100 / TOTAL ))
+          STATUS="${{ steps.mutants.outputs.exit_code == '0' && '✅ Passed' || '❌ Failed' }}"
+          {
+            echo "body<<EOF"
+            echo "### 🧬 Mutation Testing Report"
+            echo ""
+            echo "**Status:** ${STATUS}"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| Kill rate | ${KILL_RATE}% |"
+            echo "| Caught | ${CAUGHT} |"
+            echo "| Missed | ${MISSED} |"
+            echo "| Timeout | ${TIMEOUT} |"
+            echo "| Total | ${TOTAL} |"
+            if [[ -f mutants.out/missed.txt && -s mutants.out/missed.txt ]]; then
+              echo ""
+              echo "<details><summary>Missed mutants</summary>"
+              echo ""
+              echo '```'
+              head -50 mutants.out/missed.txt
+              echo '```'
+              echo "</details>"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: mutation-testing
+          message: ${{ steps.report.outputs.body }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-results
+          path: mutants.out/
+          retention-days: 30
+
+      - name: Fail if threshold not met
+        if: steps.mutants.outputs.exit_code != '0'
+        run: |
+          echo "Mutation testing failed — see mutants.out/missed.txt"
+          exit 1

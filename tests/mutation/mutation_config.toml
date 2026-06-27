@@ -1,0 +1,26 @@
+# cargo-mutants configuration
+# https://mutants.rs/configuration.html
+
+[mutants]
+timeout = 60
+jobs = 4
+minimum_test_coverage = 80
+
+# Exclude test-only and generated code
+exclude_globs = [
+    "contracts/stream/src/test.rs",
+    "contracts/stream/src/auth_tests.rs",
+    "contracts/token/src/test.rs",
+]
+
+[[file]]
+path = "contracts/stream/src/lib.rs"
+
+[[file]]
+path = "contracts/stream/src/storage.rs"
+
+[[file]]
+path = "contracts/stream/src/validate.rs"
+
+[[file]]
+path = "contracts/stream/src/events.rs"
