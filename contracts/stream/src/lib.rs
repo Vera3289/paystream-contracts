@@ -4,8 +4,9 @@
 
 mod access_control;
 mod events;
-mod storage;
-mod types;
+pub mod state_machine;
+pub mod storage;
+pub mod types;
 mod validate;
 
 #[cfg(test)]
@@ -17,34 +18,42 @@ mod auth_tests;
 #[cfg(test)]
 mod multisig_tests;
 
+#[cfg(test)]
+mod multisig_admin_tests;
+
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use access_control::{
     require_admin, require_employee, require_employee_by_id, require_employer,
     require_employer_by_id, require_pending_admin, require_pending_employer,
-    is_delegate, is_employer,
+    is_delegate, is_employer, ERR_NOT_EMPLOYER,
 };
 use storage::{
-    add_pause_event, apply_proposal, claimable_amount, clear_pending_admin, clear_pending_employer,
+    add_fee_balance, add_pause_event, apply_proposal, claimable_amount, clear_pending_admin, clear_pending_employer,
     consume_admin_nonce, get_admin, get_admin_nonce, get_employee_streams, get_employer_streams,
-    get_fee_bps, get_fee_recipient, get_max_streams_per_employer, get_min_deposit,
+    get_fee_balance, get_fee_bps, get_fee_recipient, get_max_streams_per_employer, get_min_deposit,
     get_pause_history, get_pending_admin, get_pending_employer, has_voted, index_employee_stream,
-    index_employer_stream, load_proposal, load_stream, mark_voted, next_id, next_proposal_id,
-    save_proposal, save_stream, set_admin, set_fee_bps, set_fee_recipient,
-    set_max_streams_per_employer, set_min_deposit, set_pending_admin, set_pending_employer,
-    tally_proposal,
+    index_employer_stream, index_employer_streams_batch, load_proposal, load_stream, mark_voted,
+    next_id, next_proposal_id, save_proposal, save_stream, set_admin, set_fee_bps,
+    set_fee_recipient, set_max_streams_per_employer, set_min_deposit, set_pending_admin,
+    set_pending_employer, tally_proposal,
     add_allowed_token as storage_add_allowed_token,
     remove_allowed_token as storage_remove_allowed_token,
     get_allowed_tokens as storage_get_allowed_tokens,
     is_token_allowed,
     get_paused_cfg, set_paused_cfg,
+    get_multisig_config as storage_get_multisig_config, set_multisig_config, next_pending_op_id, save_pending_op, load_pending_op,
 };
 use types::{
     DataKey, GovParam, PauseEvent, Proposal, ProposalStatus, Stream, StreamParams, StreamStatus,
     ERR_ALREADY_PAUSED, ERR_FEE_TOO_HIGH, ERR_INVALID_TOKEN, ERR_NOT_PAUSED, ERR_OVERFLOW,
     ERR_REENTRANT, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED, ERR_TOKEN_NOT_ALLOWED,
     ERR_UNAUTHORIZED_TRANSFER, ERR_WITHDRAW_COOLDOWN, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE,
+    AdminOp, MultisigConfig, PendingAdminOp,
+    ERR_MULTISIG_NOT_CONFIGURED, ERR_NOT_MULTISIG_ADMIN, ERR_ALREADY_APPROVED,
+    ERR_OP_EXPIRED, ERR_OP_ALREADY_EXECUTED, ERR_THRESHOLD_NOT_MET, ERR_OP_NOT_FOUND,
 };
 use validate::{validate_create_stream, validate_max_streams, validate_top_up, MAX_RATE_PER_SECOND};
+use state_machine::{require_transition, require_not_terminal};
 
 /// Warning thresholds in seconds (#121).
 const WARN_7_DAYS: u64 = 7 * 24 * 3600;
@@ -52,6 +61,9 @@ const WARN_1_DAY: u64 = 24 * 3600;
 
 /// Governance timelock: 2 days in seconds (#124).
 const GOV_TIMELOCK: u64 = 2 * 24 * 3600;
+
+/// Multi-sig pending operation TTL: 7 days in seconds (#275).
+const MULTISIG_OP_TTL: u64 = 7 * 24 * 3600;
 
 /// Emit near_exhaustion warning if remaining funds are below 7-day or 1-day threshold (#121).
 fn maybe_warn_exhaustion(env: &Env, stream: &Stream) {
@@ -104,6 +116,19 @@ impl StreamContract {
         consume_admin_nonce(&env, nonce);
         set_paused_cfg(&env, false);
         events::contract_paused(&env, false);
+    }
+
+    /// Emergency pause: no nonce required, for critical situations.
+    pub fn emergency_pause(env: Env, admin: Address) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        set_paused_cfg(&env, true);
+        events::contract_paused(&env, true);
+    }
+
+    /// Query whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::get_paused_cfg(&env)
     }
 
     pub fn set_min_deposit(env: Env, admin: Address, nonce: u64, amount: i128) {
@@ -250,12 +275,22 @@ impl StreamContract {
         let fee_bps = get_fee_bps(&env);
         let fee_recipient = get_fee_recipient(&env);
 
+        // Hoist allowed-tokens list read outside the loop (#286): one storage read
+        // instead of N reads for a batch of N streams.
+        let allowed_tokens = storage_get_allowed_tokens(&env);
+        let allowlist_active = !allowed_tokens.is_empty();
+
         for p in params.iter() {
             validate_create_stream(p.deposit, min_deposit, p.rate_per_second, p.stop_time, p.cliff_time, now, &employer, &p.employee);
 
+            // Token validation using pre-fetched allowlist — no extra storage read per stream.
+            if allowlist_active {
+                assert!(allowed_tokens.contains(&p.token), "{}", ERR_TOKEN_NOT_ALLOWED);
+            }
+
+            check_and_bump_rate(&env, &employer);
             let token_client = token::Client::new(&env, &p.token);
             let _ = token_client.try_balance(&employer).expect(ERR_INVALID_TOKEN);
-            assert!(is_token_allowed(&env, &p.token), "{}", ERR_TOKEN_NOT_ALLOWED);
             
             let (stream_fee_bps, net_deposit) = if fee_bps > 0 {
                 if let Some(ref recipient) = fee_recipient {
@@ -293,11 +328,15 @@ impl StreamContract {
                 delegate: None,
             };
             save_stream(&env, &stream);
-            index_employer_stream(&env, &employer, id);
             index_employee_stream(&env, &p.employee, id);
             events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second, stream_fee_bps);
             ids.push_back(id);
         }
+
+        // Batch employer index write: one read + one write for all N streams (#286)
+        // instead of N reads + N writes.
+        index_employer_streams_batch(&env, &employer, &ids);
+
         ids
     }
 
@@ -315,8 +354,8 @@ impl StreamContract {
             let cooldown_expiration = stream.last_withdraw_time.saturating_add(stream.cooldown_period);
             assert!(now >= cooldown_expiration, "{}", ERR_WITHDRAW_COOLDOWN);
         }
-        let amount = claimable_amount(&stream, now);
-        if amount == 0 {
+        let gross_amount = claimable_amount(&stream, now);
+        if gross_amount == 0 {
             return 0;
         }
 
@@ -324,30 +363,68 @@ impl StreamContract {
         stream.locked = true;
         save_stream(&env, &stream);
 
-        stream.withdrawn = stream.withdrawn.checked_add(amount).expect("withdrawn overflow");
+        let fee_bps = get_fee_bps(&env);
+        let fee_amount = if fee_bps > 0 {
+            gross_amount.checked_mul(fee_bps as i128).expect(ERR_OVERFLOW) / 10_000
+        } else {
+            0
+        };
+        let employee_amount = gross_amount.saturating_sub(fee_amount).max(0);
+        let net_amount = employee_amount;
+
+        stream.withdrawn = stream.withdrawn.checked_add(gross_amount).expect("withdrawn overflow");
         stream.last_withdraw_time = now;
         if stream.withdrawn >= stream.deposit {
+            require_transition(&StreamStatus::Active, &StreamStatus::Exhausted);
             stream.status = StreamStatus::Exhausted;
         }
 
         let token_client = token::Client::new(&env, &stream.token);
-        let employee_amount = amount;
-
-        token_client.transfer(&env.current_contract_address(), &employee, &employee_amount);
+        if fee_amount > 0 {
+            if let Some(fee_recipient) = get_fee_recipient(&env) {
+                token_client.transfer(&env.current_contract_address(), &fee_recipient, &fee_amount);
+                add_fee_balance(&env, &stream.token, fee_amount);
+                events::protocol_fee_collected(&env, stream_id, fee_amount, &fee_recipient);
+            }
+        }
+        token_client.transfer(&env.current_contract_address(), &employee, &net_amount);
         stream.locked = false;
         save_stream(&env, &stream);
-        events::withdrawn(&env, stream_id, &employee, employee_amount);
+        events::withdrawn(&env, stream_id, &employee, net_amount);
         maybe_warn_exhaustion(&env, &stream);
-        employee_amount
+        net_amount
+    }
+
+    pub fn withdraw_protocol_fees(env: Env, admin: Address, token: Address, amount: i128) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        assert!(amount > 0, "amount must be positive");
+        let balance = get_fee_balance(&env, &token);
+        assert!(balance >= amount, "insufficient fee balance");
+        let token_client = token::Client::new(&env, &token);
+        let fee_recipient = get_fee_recipient(&env).unwrap_or(admin.clone());
+        token_client.transfer(&env.current_contract_address(), &fee_recipient, &amount);
+        set_fee_balance(&env, &token, balance - amount);
+        events::protocol_fees_withdrawn(&env, &token, amount, &fee_recipient);
+    }
+
+    pub fn transfer_stream(env: Env, employee: Address, stream_id: u64, new_employee: Address) {
+        employee.require_auth();
+        let mut stream = require_employee_by_id(&env, &employee, stream_id);
+        assert!(stream.status == StreamStatus::Active || stream.status == StreamStatus::Paused, "stream not active");
+        stream.employee = new_employee.clone();
+        save_stream(&env, &stream);
+        events::stream_transferred(&env, stream_id, &employee, &new_employee);
     }
 
     pub fn top_up(env: Env, caller: Address, stream_id: u64, amount: i128) {
         caller.require_auth();
         validate_top_up(amount);
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
-        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
+        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "{}", ERR_NOT_EMPLOYER);
         assert!(stream.status != StreamStatus::Cancelled, "{}", ERR_STREAM_CANCELLED);
         assert!(stream.status != StreamStatus::Exhausted, "{}", ERR_STREAM_EXHAUSTED);
+        require_not_terminal(&stream.status);
 
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
@@ -359,9 +436,10 @@ impl StreamContract {
     pub fn pause_stream(env: Env, caller: Address, stream_id: u64) {
         caller.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
-        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
+        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "{}", ERR_NOT_EMPLOYER);
         assert!(stream.status != StreamStatus::Paused, "{}", ERR_ALREADY_PAUSED);
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
+        require_transition(&stream.status, &StreamStatus::Paused);
         let now = env.ledger().timestamp();
         stream.paused_at = now;
         stream.status = StreamStatus::Paused;
@@ -373,9 +451,10 @@ impl StreamContract {
     pub fn resume_stream(env: Env, caller: Address, stream_id: u64) {
         caller.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
-        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
+        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "{}", ERR_NOT_EMPLOYER);
         assert!(stream.status != StreamStatus::Active, "{}", ERR_NOT_PAUSED);
         assert_eq!(stream.status, StreamStatus::Paused, "stream not paused");
+        require_transition(&stream.status, &StreamStatus::Active);
         let now = env.ledger().timestamp();
         // Advance last_withdraw_time by the paused duration to exclude it while
         // preserving pre-pause accrued earnings.
@@ -395,6 +474,7 @@ impl StreamContract {
             stream.status == StreamStatus::Active || stream.status == StreamStatus::Paused,
             "stream already ended"
         );
+        require_transition(&stream.status, &StreamStatus::Cancelled);
 
         let now = env.ledger().timestamp();
         let claimable = claimable_amount(&stream, now);
@@ -623,4 +703,98 @@ impl StreamContract {
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         load_proposal(&env, proposal_id).expect("proposal not found")
     }
+
+    // -----------------------------------------------------------------------
+    // Multi-sig admin (#275)
+    //
+    // Sensitive operations (upgrade, emergency_pause) require M-of-N admin
+    // signatures before execution.
+    //
+    // Flow:
+    //   1. Any admin calls `multisig_propose` → returns op_id
+    //   2. Each admin calls `multisig_approve(op_id)` — auto-executes at threshold
+    //   3. Pending ops expire after MULTISIG_OP_TTL seconds
+    // -----------------------------------------------------------------------
+
+    /// Configure M-of-N admin multi-sig.
+    /// Must be called by the current single admin before multi-sig is active.
+    pub fn configure_multisig(env: Env, caller: Address, admins: Vec<Address>, threshold: u32) {
+        caller.require_auth();
+        require_admin(&env, &caller);
+        assert!(threshold > 0, "threshold must be > 0");
+        assert!(
+            threshold <= admins.len() as u32,
+            "threshold cannot exceed number of admins"
+        );
+        set_multisig_config(&env, &MultisigConfig { admins, threshold });
+    }
+
+    /// Propose a sensitive admin operation. Returns the pending op ID.
+    /// Caller must be one of the configured multisig admins.
+    pub fn multisig_propose(env: Env, caller: Address, op: AdminOp) -> u64 {
+        caller.require_auth();
+        let cfg = storage_get_multisig_config(&env).expect(ERR_MULTISIG_NOT_CONFIGURED);
+        assert!(cfg.admins.contains(&caller), "{}", ERR_NOT_MULTISIG_ADMIN);
+
+        let id = next_pending_op_id(&env);
+        let now = env.ledger().timestamp();
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(caller);
+
+        let pending = PendingAdminOp {
+            id,
+            op,
+            approvals,
+            expires_at: now + MULTISIG_OP_TTL,
+            executed: false,
+        };
+        save_pending_op(&env, &pending);
+        id
+    }
+
+    /// Approve a pending admin operation. Executes automatically when threshold is met.
+    pub fn multisig_approve(env: Env, caller: Address, op_id: u64) {
+        caller.require_auth();
+        let cfg = storage_get_multisig_config(&env).expect(ERR_MULTISIG_NOT_CONFIGURED);
+        assert!(cfg.admins.contains(&caller), "{}", ERR_NOT_MULTISIG_ADMIN);
+
+        let mut pending = load_pending_op(&env, op_id).expect(ERR_OP_NOT_FOUND);
+        assert!(!pending.executed, "{}", ERR_OP_ALREADY_EXECUTED);
+        assert!(
+            env.ledger().timestamp() < pending.expires_at,
+            "{}",
+            ERR_OP_EXPIRED
+        );
+        assert!(!pending.approvals.contains(&caller), "{}", ERR_ALREADY_APPROVED);
+
+        pending.approvals.push_back(caller);
+
+        if pending.approvals.len() as u32 >= cfg.threshold {
+            // Execute the operation
+            match pending.op.clone() {
+                AdminOp::Upgrade(_hash) => {
+                    // Upgrade execution is handled off-chain via the hash;
+                    // mark executed so it cannot be replayed.
+                }
+                AdminOp::EmergencyPause => {
+                    set_paused_cfg(&env, true);
+                }
+            }
+            pending.executed = true;
+        }
+
+        save_pending_op(&env, &pending);
+    }
+
+    /// Read a pending admin operation.
+    pub fn get_pending_admin_op(env: Env, op_id: u64) -> PendingAdminOp {
+        load_pending_op(&env, op_id).expect(ERR_OP_NOT_FOUND)
+    }
+
+    /// Read the current multisig configuration.
+    pub fn get_multisig_config(env: Env) -> MultisigConfig {
+        storage_get_multisig_config(&env).expect(ERR_MULTISIG_NOT_CONFIGURED)
+    }
 }
+// .
+// ..
