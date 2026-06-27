@@ -330,6 +330,12 @@ body {
   filter: brightness(0.9);
 }
 
+.status-badge-icon {
+  margin-right: 4px;
+  font-style: normal;
+  font-size: 10px;
+}
+
 .status-active {
   color: var(--status-active);
   background-color: color-mix(in srgb, var(--status-active), transparent 90%);
