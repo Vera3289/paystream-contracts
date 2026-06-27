@@ -3,6 +3,7 @@ const { body, param, query, validationResult } = require('express-validator');
 const stellarService = require('../services/stellarService');
 const cache = require('../services/cacheService');
 const idempotencyMiddleware = require('../middleware/idempotency');
+const { auditLog } = require('../middleware/auditLogger');
 const router = express.Router();
 
 /**
@@ -103,7 +104,7 @@ const router = express.Router();
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-router.post('/create', idempotencyMiddleware, [
+router.post('/create', idempotencyMiddleware, auditLog('create_stream', 'stream'), [
   body('employer').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employer address'),
   body('employee').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employee address'),
   body('token_address').isString().matches(/^C[A-Z0-9]{62}$/).withMessage('Invalid token contract address'),
@@ -372,7 +373,7 @@ router.get('/:stream_id/claimable', [
  *       400:
  *         $ref: '#/components/responses/ValidationError'
  */
-router.post('/:stream_id/withdraw', [
+router.post('/:stream_id/withdraw', auditLog('withdraw', 'stream'), [
   param('stream_id').isInt({ min: 1 }).withMessage('Invalid stream ID'),
   body('employee').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employee address'),
 ], async (req, res, next) => {
