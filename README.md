@@ -1,13 +1,36 @@
 # PayStream Contracts
 
 [![CI](https://github.com/Vera3289/paystream-contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/Vera3289/paystream-contracts/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/Vera3289/paystream-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Vera3289/paystream-contracts)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Soroban smart contracts for **PayStream** — decentralized payroll and salary streaming on the Stellar blockchain.
 
+## REST API
+
+The `api/` directory contains a Node.js/Express wrapper around the Soroban stream contracts.
+
+### Endpoints
+
+All responses follow the shape `{ success: boolean, data: object|null, error: string|null }`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/streams` | Create a new payment stream. Body: `{ sender, recipient, amount, duration }`. Stubs a `create_stream` contract call. |
+| `GET` | `/streams/:id` | Fetch current state of a stream by ID. Stubs a `get_stream` contract call. |
+| `POST` | `/streams/:id/withdraw` | Trigger a withdrawal from a stream. Body: `{ amount }`. Stubs a `withdraw` contract call. |
+
+### Running locally
+
+```bash
+cd api
+npm install
+npm start   # http://localhost:3001
+```
+
 PayStream lets employers stream salaries to employees in real-time, per-second. Instead of waiting for a monthly paycheck, employees earn and can withdraw their salary continuously as they work — fully on-chain, trustless, and transparent.
 
-> 🎬 **[Watch the demo](https://youtu.be/paystream-demo)** — see the full `create_stream → withdraw` flow in action.
+> 🎬 **[Watch the PayStream stream creation tutorial](docs/video-tutorial.md)** — under 10 minutes, includes wallet setup, create stream, withdraw, and captions.
 
 ---
 
@@ -113,6 +136,12 @@ The `cargo-cache` volume persists the Cargo registry between runs so subsequent 
 ## Stream Contract Reference
 
 > Full parameter, return value, error, and example documentation: **[docs/api-reference.md](docs/api-reference.md)**
+>
+> Developer quickstart tutorial (zero to running stream in 30 min): **[docs/quickstart.md](docs/quickstart.md)**
+>
+> SDK examples (JavaScript, Python, Rust): **[examples/](examples/)**
+>
+> Frontend integration guide (TypeScript): **[docs/integration/frontend.md](docs/integration/frontend.md)**
 
 ### Functions
 
@@ -138,6 +167,8 @@ The `cargo-cache` volume persists the Cargo registry between runs so subsequent 
 | One `create_streams_batch` call | 1 | 1 × base fee + per-stream resource overhead |
 
 `create_streams_batch` is cheaper for N ≥ 2 because Stellar charges one base fee per transaction. Per-stream resource overhead grows linearly but is far smaller than the per-transaction base fee saved.
+
+**Gas optimizations in `create_streams_batch` (#286):** The token allowlist is read once before the loop (not once per stream), and the employer stream index is written once after the loop (not once per stream). For a batch of 10 streams this eliminates 18 redundant storage operations vs the naive implementation. See [`benchmarks/gas-optimization-report.md`](benchmarks/gas-optimization-report.md) for full details.
 
 ### Stream Status Lifecycle
 
@@ -193,6 +224,43 @@ make deploy-local
 
 ---
 
+## Using USDC as the Payment Token
+
+PayStream is token-agnostic — any [SEP-41](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0041.md) compliant token works. The recommended default is **Stellar USDC** issued by Circle.
+
+### USDC Contract Addresses
+
+| Network | Contract Address |
+|---|---|
+| Testnet | `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` |
+| Mainnet | `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` |
+
+Source: [Circle — Stellar USDC](https://developers.circle.com/stablecoins/stellar-usdc)
+
+### Creating a USDC Stream (JavaScript)
+
+```js
+import { CONFIG, USDC } from "./config";
+
+// 1 USDC = 10_000_000 stroops (7 decimal places on Stellar)
+const ONE_USDC = 10_000_000n;
+
+await contract.create_stream({
+  employer:        myPublicKey,
+  employee:        employeePublicKey,
+  token_address:   USDC.testnet,          // swap for USDC.mainnet in prod
+  deposit:         ONE_USDC * 3600n,      // 3600 USDC
+  rate_per_second: ONE_USDC,              // 1 USDC / second
+  stop_time:       0n,                    // no hard stop
+  cooldown_period: 0n,
+  cliff_time:      0n,
+});
+```
+
+The demo UI pre-fills the token field with the testnet USDC address automatically via `CONFIG.defaultToken`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -208,3 +276,4 @@ See [SECURITY.md](SECURITY.md). Report vulnerabilities to `security@paystream.ex
 ---
 
 Built with ❤️ on Stellar
+.

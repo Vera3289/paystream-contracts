@@ -6,6 +6,7 @@ Thank you for contributing to PayStream — a Soroban smart contract system for 
 
 ## Table of Contents
 
+- [Onboarding Guide](#onboarding-guide)
 - [Development Setup](#development-setup)
   - [macOS](#macos)
   - [Linux](#linux)
@@ -14,6 +15,8 @@ Thank you for contributing to PayStream — a Soroban smart contract system for 
 - [Project Structure](#project-structure)
 - [Coding Standards](#coding-standards)
 - [Commit Conventions](#commit-conventions)
+- [Secret Scanning](#secret-scanning)
+- [Software Bill of Materials (SBOM)](#software-bill-of-materials-sbom)
 - [Pull Request Process](#pull-request-process)
 - [Testing Requirements](#testing-requirements)
 - [Code Review Expectations](#code-review-expectations)
@@ -21,6 +24,10 @@ Thank you for contributing to PayStream — a Soroban smart contract system for 
 - [License](#license)
 
 ---
+
+## Onboarding Guide
+
+If this is your first contribution, start with `docs/onboarding.md` for a quick path from fork setup to opening your first pull request.
 
 ## Development Setup
 
@@ -239,6 +246,75 @@ chore: bump soroban-sdk to 22.0.0
 - No period at the end of the subject line
 - Reference issues in the footer: `Closes #15` or `Fixes #3`
 - Breaking changes must include `BREAKING CHANGE:` in the footer
+
+---
+
+## Secret Scanning
+
+PayStream uses [gitleaks](https://github.com/gitleaks/gitleaks) to prevent accidental commits of secrets (Stellar secret keys, tokens, etc.). Scanning runs automatically in CI on every push and PR via `.github/workflows/secret-scan.yml`.
+
+### Install the pre-commit hook (recommended)
+
+The hook runs `cargo fmt --check`, `cargo clippy`, ESLint on staged JS/TS files, and a gitleaks secret scan before every commit. Install it with:
+
+```bash
+make install-hooks
+
+# Install gitleaks (pick one)
+brew install gitleaks                          # macOS
+sudo apt-get install gitleaks                  # Debian/Ubuntu (if in apt)
+# or download a binary from https://github.com/gitleaks/gitleaks/releases
+```
+
+If `gitleaks` is not installed the hook exits cleanly — it will not block commits. CI will still catch any leaks.
+
+### Running a manual scan
+
+```bash
+gitleaks detect --config .gitleaks.toml --redact
+```
+
+### False positives
+
+Add an allowlist entry to `.gitleaks.toml`. See the comments in that file for examples. Do **not** use `--no-git` or disable the hook to silence a warning — investigate first.
+
+---
+
+## Software Bill of Materials (SBOM)
+
+PayStream generates an SBOM for every release to support supply chain security and compliance requirements.
+
+### What is generated
+
+On each GitHub release, the CI pipeline (`sbom.yml`) uses [Syft](https://github.com/anchore/syft) to produce two SBOM files and attaches them to the release assets:
+
+| File | Format |
+|---|---|
+| `paystream-sbom.cyclonedx.json` | CycloneDX JSON |
+| `paystream-sbom.spdx.json` | SPDX JSON |
+
+Both files enumerate every dependency — Rust crates (from `Cargo.lock`), Node packages (from `package-lock.json`), and container layers.
+
+### Vulnerability scanning
+
+After SBOM generation, [Grype](https://github.com/anchore/grype) scans the CycloneDX SBOM against the NVD, GitHub Advisories, and other vulnerability databases. Results are uploaded to the repository's GitHub Security tab as a SARIF report.
+
+Builds are **not** failed on discovery — vulnerabilities are tracked and triaged via the Security tab. Critical/high findings should be addressed before the next release.
+
+### Viewing the SBOM
+
+Download from any GitHub release page → Assets → `paystream-sbom.cyclonedx.json`. To inspect locally:
+
+```bash
+# Install syft
+curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+# Generate an SBOM locally (CycloneDX)
+syft . -o cyclonedx-json=paystream-sbom.cyclonedx.json
+
+# Scan for vulnerabilities
+grype sbom:paystream-sbom.cyclonedx.json
+```
 
 ---
 

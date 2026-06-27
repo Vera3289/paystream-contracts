@@ -2,14 +2,18 @@
 
 #![no_std]
 
+mod storage;
+mod types;
+
 use soroban_sdk::{contract, contractimpl, Address, Env};
-use storage::{
-    allowance, balance_of, get_admin, set_admin, set_allowance,
-    set_balance, set_total_supply, total_supply,
+use crate::storage::{
+    allowance, balance_of, get_admin, is_minter, set_admin, set_allowance,
+    set_balance, set_minter, set_total_supply, total_supply,
 };
 
 pub const MAX_SUPPLY: i128 = 1_000_000_000_000_000_000;
 const ERR_SUPPLY_CAP_EXCEEDED: &str = "supply cap exceeded";
+const ERR_NOT_AUTHORIZED_MINT: &str = "not authorized to mint";
 
 #[contract]
 pub struct TokenContract;
@@ -84,6 +88,30 @@ impl TokenContract {
         set_allowance(&env, &owner, &spender, amount);
     }
 
+    fn require_admin_or_minter(env: &Env, caller: &Address) {
+        let admin = get_admin(env);
+        if *caller == admin {
+            return;
+        }
+        assert!(is_minter(env, caller), "{}", ERR_NOT_AUTHORIZED_MINT);
+    }
+
+    pub fn add_minter(env: Env, admin: Address, minter: Address) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        set_minter(&env, &minter, true);
+    }
+
+    pub fn remove_minter(env: Env, admin: Address, minter: Address) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        set_minter(&env, &minter, false);
+    }
+
+    pub fn is_minter(env: Env, address: Address) -> bool {
+        is_minter(&env, &address)
+    }
+
     /// Transfer `amount` tokens from `from` to `to` using `spender`'s allowance.
     ///
     /// # Parameters
@@ -108,20 +136,20 @@ impl TokenContract {
 
     /// Mint `amount` new tokens to `to`, increasing total supply.
     ///
-    /// Only the admin may call this function.
+    /// Only the admin or an authorized minter may call this function.
     ///
     /// # Parameters
-    /// - `admin` — must match the stored admin (requires auth)
+    /// - `caller` — authorized caller (requires auth)
     /// - `to` — recipient of minted tokens
     /// - `amount` — number of tokens to mint (must be > 0)
     ///
     /// # Errors
-    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - Panics if `caller` auth fails or is not authorized to mint
     /// - Panics if `amount` ≤ 0
     /// - Panics if minting would exceed `MAX_SUPPLY`
-    pub fn mint(env: Env, admin: Address, to: Address, amount: i128) {
-        admin.require_auth();
-        assert_eq!(get_admin(&env), admin, "not admin");
+    pub fn mint(env: Env, caller: Address, to: Address, amount: i128) {
+        caller.require_auth();
+        Self::require_admin_or_minter(&env, &caller);
         assert!(amount > 0, "amount must be positive");
         let current_supply = total_supply(&env);
         let new_supply = current_supply
@@ -179,7 +207,7 @@ impl TokenContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
     fn setup() -> (Env, TokenContractClient<'static>) {
         let env = Env::default();
@@ -221,6 +249,30 @@ mod test {
         client.burn(&user, &200);
         assert_eq!(client.total_supply(), 1_300);
         assert_eq!(client.balance(&user), 300);
+    }
+
+    #[test]
+    fn test_granted_minter_can_mint() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let minter = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &1_000);
+        client.add_minter(&admin, &minter);
+        client.mint(&minter, &user, &500);
+        assert_eq!(client.total_supply(), 1_500);
+        assert_eq!(client.balance(&user), 500);
+    }
+
+    #[test]
+    #[should_panic(expected = "not authorized to mint")]
+    fn test_unauthorized_mint_rejected() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let unauthorized = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin, &1_000);
+        client.mint(&unauthorized, &user, &100);
     }
 
     #[test]
@@ -298,6 +350,7 @@ mod test {
     fn test_initialize_beyond_cap_fails() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin, &MAX_SUPPLY + 1);
+        client.initialize(&admin, &(MAX_SUPPLY + 1));
     }
 }
+

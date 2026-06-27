@@ -8,4 +8,5 @@ pub enum TokenDataKey {
     Allowance(Address, Address),
     TotalSupply,
     Admin,
+    Minter(Address),
 }
