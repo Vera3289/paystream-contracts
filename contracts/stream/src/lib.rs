@@ -273,6 +273,7 @@ impl StreamContract {
                 assert!(allowed_tokens.contains(&p.token), "{}", ERR_TOKEN_NOT_ALLOWED);
             }
 
+            check_and_bump_rate(&env, &employer);
             let token_client = token::Client::new(&env, &p.token);
             let _ = token_client.try_balance(&employer).expect(ERR_INVALID_TOKEN);
             
