@@ -1455,3 +1455,56 @@ code {
 .wizard-skip {
   margin-right: auto;
 }
+
+/* ── Skeleton / Shimmer components (#478) ── */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+
+.skeleton-block {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--border) 25%,
+    var(--bg-history) 50%,
+    var(--border) 75%
+  );
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* Stream list */
+.skeleton-list { display: flex; flex-direction: column; gap: 12px; }
+.skeleton-list-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.skeleton-list-header { display: flex; justify-content: space-between; align-items: center; }
+.skeleton-list-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.skeleton-metric { display: flex; flex-direction: column; gap: 6px; }
+.skeleton-progress { margin-top: 4px; }
+
+/* Chart */
+.skeleton-chart { display: flex; flex-direction: column; gap: 12px; padding: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; }
+.skeleton-chart-legend { display: flex; gap: 16px; }
+.skeleton-legend-item { display: flex; align-items: center; gap: 6px; }
+
+/* Detail page */
+.skeleton-detail { display: flex; flex-direction: column; gap: 16px; }
+.skeleton-detail-header { display: flex; justify-content: space-between; align-items: center; }
+.skeleton-detail-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.skeleton-stat-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; }
+.skeleton-detail-actions { display: flex; gap: 8px; }
+.skeleton-detail-feed { display: flex; flex-direction: column; gap: 8px; }
+.skeleton-feed-row { display: flex; gap: 16px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+
+/* Table */
+.skeleton-table { display: flex; flex-direction: column; gap: 2px; }
+.skeleton-table-row { display: grid; grid-template-columns: repeat(var(--cols, 4), 1fr); gap: 16px; padding: 10px 12px; background: var(--bg-card); border-radius: 4px; }
+.skeleton-table-head { background: var(--bg-history); }
