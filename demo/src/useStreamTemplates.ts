@@ -6,7 +6,7 @@
  * persist across sessions without any network cost.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { CONFIG } from "./config";
 
 export interface StreamTemplate {

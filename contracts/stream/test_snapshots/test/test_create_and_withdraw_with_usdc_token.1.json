@@ -161,7 +161,7 @@
     []
   ],
   "ledger": {
-    "protocol_version": 25,
+    "protocol_version": 26,
     "sequence_number": 0,
     "timestamp": 60,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -267,6 +267,12 @@
                     "val": {
                       "u64": "0"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "delegate"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {
@@ -415,24 +421,53 @@
                       "key": {
                         "vec": [
                           {
-                            "symbol": "AdminNonce"
+                            "symbol": "Config"
                           }
                         ]
                       },
                       "val": {
-                        "u64": "1"
-                      }
-                    },
-                    {
-                      "key": {
-                        "vec": [
+                        "map": [
                           {
-                            "symbol": "MinDeposit"
+                            "key": {
+                              "symbol": "admin_nonce"
+                            },
+                            "val": {
+                              "u64": "1"
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "fee_bps"
+                            },
+                            "val": {
+                              "u32": 0
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "max_streams"
+                            },
+                            "val": {
+                              "u32": 100
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "min_deposit"
+                            },
+                            "val": {
+                              "i128": "1000000"
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "paused"
+                            },
+                            "val": {
+                              "bool": false
+                            }
                           }
                         ]
-                      },
-                      "val": {
-                        "i128": "1000000"
                       }
                     },
                     {

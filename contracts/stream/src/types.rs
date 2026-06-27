@@ -2,6 +2,17 @@
 
 use soroban_sdk::{contracttype, Address};
 
+/// Parameters for a single stream in a batch create call.
+#[contracttype]
+#[derive(Clone)]
+pub struct StreamParams {
+    pub employee: Address,
+    pub token: Address,
+    pub deposit: i128,
+    pub rate_per_second: i128,
+    pub stop_time: u64,
+}
+
 /// Status of a salary stream.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -120,7 +131,7 @@ pub struct ContractConfig {
 impl ContractConfig {
     pub fn default() -> Self {
         ContractConfig {
-            min_deposit: 10_000,
+            min_deposit: 0,
             fee_bps: 0,
             max_streams: 100,
             admin_nonce: 0,
@@ -143,6 +154,7 @@ pub enum DataKey {
     PendingAdmin,
     FeeBps,
     FeeRecipient,
+    FeeBalance(Address),
     /// Pending employer for a two-step stream ownership transfer.
     PendingEmployer(u64),
     /// Maximum number of streams an employer can create.
@@ -158,11 +170,10 @@ pub enum DataKey {
     AllowedTokens,
     // Packed config (#272) — replaces individual MinDeposit/FeeBps/MaxStreamsPerEmployer/AdminNonce/Paused keys
     Config,
-    // Multisig admin (#499)
+    // Multi-sig admin (#275)
     MultisigConfig,
-    AdminAction(u64),
-    AdminActionCount,
-    AdminVoted(u64, Address),
+    PendingAdminOp(u64),
+    PendingAdminOpCount,
 }
 
 pub const ERR_ZERO_RATE: &str = "E001: rate_per_second must be greater than zero";
@@ -186,50 +197,49 @@ pub const ERR_ALREADY_PAUSED: &str = "E016: stream is already paused";
 pub const ERR_NOT_PAUSED: &str = "E017: stream is not paused";
 pub const ERR_TOKEN_NOT_ALLOWED: &str = "E018: token is not on the allowlist";
 pub const ERR_CLIFF_AFTER_STOP: &str = "E019: cliff time must be before or equal to stop time";
-pub const ERR_BELOW_THRESHOLD: &str = "E020: votes below required threshold";
-pub const ERR_ALREADY_VOTED_ADMIN: &str = "E021: already voted on this admin action";
+pub const ERR_DEPOSIT_TOO_LOW: &str = "E020: deposit too low for given rate";
 
 // ---------------------------------------------------------------------------
-// Multisig admin types (#499)
+// Multi-sig admin types (#275)
 // ---------------------------------------------------------------------------
 
-/// M-of-N multisig configuration for admin-level operations.
+/// Configuration for M-of-N admin multi-sig.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MultisigConfig {
-    pub signers: soroban_sdk::Vec<Address>,
+    /// Ordered list of admin addresses.
+    pub admins: soroban_sdk::Vec<Address>,
+    /// Number of signatures required to approve an operation.
     pub threshold: u32,
 }
 
-/// Type of admin action that can be proposed via multisig.
+/// A sensitive operation pending multi-sig approval.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub enum AdminActionType {
-    Pause,
-    Unpause,
-    UpgradeFee,
-    SetFee,
+pub enum AdminOp {
+    /// Upgrade the contract WASM to the given hash.
+    Upgrade(soroban_sdk::BytesN<32>),
+    /// Trigger an emergency global pause.
+    EmergencyPause,
 }
 
-/// Status of an admin action proposal.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum AdminActionStatus {
-    Pending,
-    Approved,
-    Rejected,
-    Executed,
-}
-
-/// An on-chain admin action proposal for multisig governance.
+/// A pending admin operation awaiting threshold signatures.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct AdminAction {
+pub struct PendingAdminOp {
     pub id: u64,
-    pub action_type: AdminActionType,
-    pub param_value: u64,
-    pub votes_for: u32,
-    pub votes_against: u32,
-    pub status: AdminActionStatus,
-    pub executable_after: u64,
+    pub op: AdminOp,
+    /// Addresses that have already approved.
+    pub approvals: soroban_sdk::Vec<Address>,
+    /// Ledger timestamp after which this pending op expires.
+    pub expires_at: u64,
+    pub executed: bool,
 }
+
+pub const ERR_MULTISIG_NOT_CONFIGURED: &str = "E021: multisig admin not configured";
+pub const ERR_NOT_MULTISIG_ADMIN: &str = "E022: caller is not a multisig admin";
+pub const ERR_ALREADY_APPROVED: &str = "E023: caller already approved this operation";
+pub const ERR_OP_EXPIRED: &str = "E024: pending operation has expired";
+pub const ERR_OP_ALREADY_EXECUTED: &str = "E025: pending operation already executed";
+pub const ERR_THRESHOLD_NOT_MET: &str = "E026: approval threshold not yet met";
+pub const ERR_OP_NOT_FOUND: &str = "E027: pending operation not found";

@@ -86,7 +86,7 @@ export function usePayStream() {
       clearError();
       try {
         const xdr = await client.createStream(
-          publicKey, employee, tokenAddress, deposit, ratePerSecond, stopTime, 0n
+          publicKey, employee, tokenAddress, deposit, ratePerSecond, stopTime, 0n, 0n
         );
         const signed = await freighterSignTransaction(xdr, CONFIG.networkPassphrase);
         const hash = await client.submitTransaction(signed);

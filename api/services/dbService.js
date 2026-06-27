@@ -16,6 +16,7 @@ if (databaseUrl) {
 // In-memory fallback stores
 const inMemoryPrefs = new Map();
 const inMemoryNotifications = new Map();
+const inMemoryWebhooks = new Map();
 const inMemoryAuditLogs = [];
 let auditLogIdCounter = 1;
 
@@ -82,13 +83,40 @@ async function logAdminAction(actor, action, params, transactionHash) {
   }
 }
 
+async function createAuditLog({ actor, action, entity_type, entity_id, before_state, after_state, metadata }) {
+  if (pool) {
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query(
+          'INSERT INTO audit_logs (actor, action, entity_type, entity_id, before_state, after_state, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+          [actor, action, entity_type || null, entity_id || null,
+           before_state ? JSON.stringify(before_state) : null,
+           after_state ? JSON.stringify(after_state) : null,
+           metadata ? JSON.stringify(metadata) : null]
+        );
+        return;
+      } finally {
+        client.release();
+      }
+    } catch (err) {
+      console.warn(`[DbService] Failed to write audit log: ${err.message}`);
+    }
+  }
+  inMemoryAuditLogs.push({
+    id: auditLogIdCounter++,
+    actor, action, entity_type, entity_id, before_state, after_state, metadata,
+    created_at: new Date(),
+  });
+}
+
 async function getAuditLogs(limit = 100, offset = 0) {
   if (pool) {
     try {
       const client = await pool.connect();
       try {
         const result = await client.query(
-          'SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT $1 OFFSET $2',
+          'SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2',
           [limit, offset]
         );
         return result.rows;
@@ -97,7 +125,6 @@ async function getAuditLogs(limit = 100, offset = 0) {
       }
     } catch (err) {
       console.warn(`[DbService] Failed to read audit logs from database: ${err.message}`);
-      // Fallback to in-memory
       return [...inMemoryAuditLogs].reverse().slice(offset, offset + limit);
     }
   } else {
@@ -107,21 +134,24 @@ async function getAuditLogs(limit = 100, offset = 0) {
 
 async function exportAuditLogsCSV() {
   const logs = await getAuditLogs(100000, 0);
-  const headers = ['id', 'actor', 'action', 'timestamp', 'params', 'transaction_hash'];
+  const headers = ['id', 'actor', 'action', 'entity_type', 'entity_id', 'before_state', 'after_state', 'metadata', 'created_at'];
   const csvLines = [headers.join(',')];
-  
+
   logs.forEach(log => {
     const values = [
       log.id,
       log.actor,
       log.action,
-      log.timestamp.toISOString(),
-      JSON.stringify(log.params).replace(/"/g, '""'),
-      log.transaction_hash || ''
+      log.entity_type || '',
+      log.entity_id || '',
+      log.before_state ? JSON.stringify(log.before_state).replace(/"/g, '""') : '',
+      log.after_state ? JSON.stringify(log.after_state).replace(/"/g, '""') : '',
+      log.metadata ? JSON.stringify(log.metadata).replace(/"/g, '""') : '',
+      (log.created_at || log.timestamp || new Date()).toISOString(),
     ];
     csvLines.push(values.map(v => `"${v}"`).join(','));
   });
-  
+
   return csvLines.join('\n');
 }
 
@@ -177,6 +207,7 @@ module.exports = {
   inMemoryWebhooks,
   deleteOffChainUserData,
   logAdminAction,
+  createAuditLog,
   getAuditLogs,
   exportAuditLogsCSV,
 };

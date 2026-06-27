@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts/paystream.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+scrape_configs:
+  - job_name: stellar_node
+    static_configs:
+      - targets: ["stellar-node:11626"]
+    metrics_path: /metrics
+
+  - job_name: contract_indexer
+    static_configs:
+      - targets: ["contract-indexer:8080"]
+    metrics_path: /metrics
+
+  - job_name: paystream_api
+    static_configs:
+      - targets: ["paystream-api:3000"]
+    metrics_path: /metrics
