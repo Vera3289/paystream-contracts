@@ -1,151 +1,69 @@
-# Architecture Documentation
+# PayStream Architecture
 
----
+## Storage Tiers
 
-## System Overview
+The Stream Contract uses Soroban's three storage tiers:
 
-PayStream is a fully on-chain payroll streaming system built on the Stellar blockchain using Soroban smart contracts. There is no off-chain backend or database — all state, logic, and events live on-chain.
+| Tier | Keys | TTL management |
+|---|---|---|
+| Instance | Config, Admin, StreamCount, AllowedTokens, … | Lives with the contract instance; no explicit TTL needed |
+| Persistent | Stream(id), EmployerStreams, EmployeeStreams, PauseHistory, Proposal, Voted | Explicit TTL — extended on every read and write |
+| Temporary | (not used) | — |
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     Stellar Network                      │
-│                                                         │
-│  ┌────────────────────┐    ┌────────────────────────┐   │
-│  │   Stream Contract  │───▶│    Token Contract       │   │
-│  │                    │    │  (Fungible payment token)│  │
-│  │  - create_stream   │    │  - transfer             │   │
-│  │  - withdraw        │    │  - balance              │   │
-│  │  - pause/resume    │    │  - mint/burn (admin)    │   │
-│  │  - cancel          │    └────────────────────────┘   │
-│  │  - top_up          │                                  │
-│  └────────────────────┘                                  │
-│            │                                             │
-│     Ledger Entries (on-chain state)                      │
-└─────────────────────────────────────────────────────────┘
-        ▲                    ▲
-        │                    │
-  Employer SDK          Employee SDK
-  (create, top_up,      (withdraw,
-   pause, cancel)        get_stream)
-```
+## TTL Strategy (#289)
 
----
+Soroban persistent storage entries expire if their TTL (time-to-live, measured in ledgers) reaches zero. PayStream extends TTLs proactively on every read and write so that active stream data never expires.
 
-## Component Interactions
+### Constants (`contracts/stream/src/storage.rs`)
 
-### Stream Contract (`contracts/stream`)
+| Constant | Default value | Meaning |
+|---|---|---|
+| `TTL_THRESHOLD` | 6 307 200 ledgers (~365 days at 5 s/ledger) | Minimum remaining TTL before an extension is triggered |
+| `TTL_EXTEND_TO` | 12 614 400 ledgers (~730 days at 5 s/ledger) | Target TTL after extension |
+| `TTL_WARN_THRESHOLD` | 518 400 ledgers (~30 days at 5 s/ledger) | Threshold below which a monitoring alert should fire |
 
-The core contract. Manages stream lifecycle and escrow.
+### How it works
 
-| Module | Responsibility |
-|--------|---------------|
-| `lib.rs` | Public entrypoints — validates caller, delegates to storage/events |
-| `storage.rs` | Reads/writes ledger entries; computes `claimable` amount |
-| `types.rs` | `Stream` struct, `StreamStatus` enum, storage keys |
-| `events.rs` | Publishes on-chain events for each state change |
+1. **On write** (`save_stream`, `index_employer_stream`, `index_employee_stream`, `add_pause_event`): after persisting the entry, `extend_ttl` is called with `(TTL_THRESHOLD, TTL_EXTEND_TO)`. Soroban only performs the extension when the current TTL is below `TTL_THRESHOLD`, so the call is a no-op for recently-written entries.
 
-### Token Contract (`contracts/token`)
+2. **On read** (`load_stream`): if the entry exists, `extend_ttl` is called immediately. This ensures that even read-only operations (e.g. `claimable`, `get_stream`) keep the entry alive.
 
-A standard Stellar fungible token used as the payment currency for streams. The stream contract calls `transfer` on this contract to move funds between employer, contract escrow, and employee.
+3. **Warn when TTL is low**: off-chain monitoring (indexer or cron job) should query the current TTL of each `Stream(id)` entry and alert when it falls below `TTL_WARN_THRESHOLD` (~30 days). This gives operators time to trigger a write (e.g. a no-op `top_up`) before the entry expires.
 
-### Caller Interaction Flow
+### Adjusting TTL for different networks
 
-```
-Employer                 Stream Contract          Token Contract
-   │                           │                        │
-   │── create_stream() ───────▶│                        │
-   │                           │── transfer(deposit) ──▶│
-   │                           │   (employer → contract)│
-   │                           │◀───────────────────────│
-   │◀── stream_id ─────────────│                        │
-   │                           │                        │
-Employee                       │                        │
-   │── withdraw(stream_id) ───▶│                        │
-   │                           │── transfer(claimable) ▶│
-   │                           │   (contract → employee)│
-   │◀── ok ────────────────────│                        │
-```
+Stellar Mainnet and Testnet may have different ledger close times. To adjust:
 
----
+1. Change `TTL_THRESHOLD` and `TTL_EXTEND_TO` in `contracts/stream/src/storage.rs`.
+2. Rebuild and redeploy the contract.
 
-## Data Flow
+A ledger-to-days conversion: `days = ledgers × close_time_seconds / 86400`.
 
-### Stream Creation
+## Multi-Network Support (#260)
 
-1. Employer calls `create_stream(employer, employee, token, deposit, rate_per_second, stop_time)`.
-2. Contract validates inputs and transfers `deposit` from employer to itself via the token contract.
-3. A `Stream` ledger entry is written with `status = Active`, `start_time = now`.
-4. A `StreamCreated` event is emitted.
+The backend supports testnet and mainnet simultaneously. Network selection is controlled by the `X-Network` request header (values: `testnet`, `mainnet`). When the header is absent the backend defaults to `testnet` in development and `mainnet` in production.
 
-### Withdrawal
+Each network has its own RPC endpoint and database schema:
 
-1. Employee calls `withdraw(employee, stream_id)`.
-2. Contract reads stream, computes `claimable = min((now - last_withdraw_time) * rate_per_second, deposit - withdrawn)`.
-3. Contract transfers `claimable` tokens to employee.
-4. `last_withdraw_time` and `withdrawn` are updated in the ledger entry.
-5. If `withdrawn == deposit`, status transitions to `Exhausted`.
+| Variable | Purpose |
+|---|---|
+| `TESTNET_RPC_URL` | Soroban RPC for testnet |
+| `MAINNET_RPC_URL` | Soroban RPC for mainnet |
+| `TESTNET_STREAM_CONTRACT_ID` | Stream contract on testnet |
+| `MAINNET_STREAM_CONTRACT_ID` | Stream contract on mainnet |
+| `TESTNET_DATABASE_URL` | Postgres connection string for testnet schema |
+| `MAINNET_DATABASE_URL` | Postgres connection string for mainnet schema |
 
-### Claimable Calculation
+See `.env.example` for the full list of variables.
 
-```
-elapsed = min(now, stop_time ?? now) - last_withdraw_time
-claimable = min(elapsed * rate_per_second, deposit - withdrawn)
-```
+## Blue-Green Deployment (#301)
 
-Paused periods are excluded: `last_withdraw_time` is set to the current time when pausing, so no accrual occurs while paused.
+Zero-downtime deployments are achieved with a blue-green strategy:
 
----
+1. Two identical API environments (`blue` and `green`) run behind a load balancer.
+2. The inactive slot receives the new release.
+3. An automated health check (`/health`) must return HTTP 200 before traffic is switched.
+4. Traffic is switched by updating the load balancer target (or DNS CNAME).
+5. Instant rollback: switch the load balancer back to the previous slot.
 
-## Technology Stack Justification
-
-| Technology | Choice | Reason |
-|-----------|--------|--------|
-| Blockchain | Stellar (Soroban) | Low fees (~$0.0001/tx), fast finality (5s), built-in token support, WASM-based contracts |
-| Language | Rust | Required by Soroban; memory safety, zero-cost abstractions, strong type system |
-| SDK | soroban-sdk v22 | Official SDK; provides storage, auth, events, cross-contract calls |
-| CI | GitHub Actions | Native GitHub integration; matrix builds for lint/test/build |
-
----
-
-## Scalability Considerations
-
-- **Horizontal scaling**: Each stream is an independent ledger entry. There is no shared mutable state that creates contention. Throughput scales with Stellar network capacity (~1000 TPS).
-- **State expiration**: Soroban ledger entries have a TTL. Long-running streams bump TTL on each interaction. Expired entries must be restored before use (standard Soroban pattern).
-- **Stream count**: `stream_count` is a single counter updated on each `create_stream`. Under very high creation rates this is a single-entry bottleneck, but at current Stellar TPS it is not a concern.
-
----
-
-## Security Architecture
-
-| Threat | Mitigation |
-|--------|-----------|
-| Unauthorized withdrawal | `withdraw` checks `employee == caller` via `require_auth` |
-| Employer claw-back of earned salary | Only `deposit - withdrawn` (unearned portion) is refunded on cancel |
-| Re-entrancy | Soroban execution model is single-threaded; no re-entrancy possible |
-| Integer overflow | Rust's checked arithmetic; `soroban-sdk` uses `i128` with overflow protection |
-| Admin key compromise | Admin role is limited to contract initialization only |
-| Token contract substitution | Token address is fixed at stream creation and stored in the stream entry |
-
----
-
-## Deployment Architecture
-
-```
-GitHub Actions CI
-       │
-       ├── lint / test (cargo test)
-       ├── build (stellar contract build → .wasm)
-       │
-       ▼
-  Release artifact (.wasm)
-       │
-       ├── Testnet (staging)     ./scripts/deploy-testnet.sh
-       │       │
-       │       └── init          ./scripts/init-testnet.sh
-       │
-       └── Mainnet (production)  manual promotion after staging validation
-```
-
-- WASM artifacts are deterministic: the same source produces the same bytecode.
-- Contract upgrades use Soroban's `update_current_contract_wasm` — the contract address stays the same; only the code changes.
-- Deployment keys are stored as GitHub Actions secrets and never committed to the repository.
+See `scripts/deploy-blue-green.sh` and `.github/workflows/deploy-blue-green.yml` for the implementation.
