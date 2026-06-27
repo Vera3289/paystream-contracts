@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use soroban_sdk::{Env, Address};
 use crate::types::TokenDataKey;
 
@@ -36,4 +38,17 @@ pub fn get_admin(env: &Env) -> Address {
 
 pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&TokenDataKey::Admin, admin);
+}
+
+pub fn is_minter(env: &Env, address: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get(&TokenDataKey::Minter(address.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_minter(env: &Env, address: &Address, enabled: bool) {
+    env.storage()
+        .instance()
+        .set(&TokenDataKey::Minter(address.clone()), &enabled);
 }
