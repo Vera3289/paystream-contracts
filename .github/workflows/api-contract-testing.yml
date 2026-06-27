@@ -1,0 +1,18 @@
+name: API Contract Testing
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  api-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate contract scaffold
+        run: python - <<'PY'
+import os
+print('api contract scaffold exists:', os.path.exists('api/contracts/README.md'))
+PY

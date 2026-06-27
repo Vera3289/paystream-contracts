@@ -1,0 +1,403 @@
+openapi: 3.1.0
+info:
+  title: PayStream Contracts API
+  description: |
+    PayStream smart contract interface for real-time salary streaming on Stellar (Soroban).
+    All contract calls are Soroban XDR invocations. This document describes function
+    signatures, argument types, and return values.
+  version: 1.0.0
+  contact:
+    email: support@paystream.example
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: https://soroban-testnet.stellar.org
+    description: Stellar Testnet
+  - url: https://soroban.stellar.org
+    description: Stellar Mainnet
+
+tags:
+  - name: Admin
+    description: Contract initialization
+  - name: Streams
+    description: Stream lifecycle management
+  - name: Employee
+    description: Employee withdrawal operations
+  - name: Queries
+    description: Read-only state queries
+
+paths:
+  /initialize:
+    post:
+      tags: [Admin]
+      summary: Initialize contract admin
+      operationId: initialize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin]
+              properties:
+                admin:
+                  type: string
+                  description: Stellar account address of the admin
+                  example: GABC1234...
+      responses:
+        '200':
+          description: Contract initialized
+        '400':
+          $ref: '#/components/responses/AlreadyInitialized'
+
+  /create_stream:
+    post:
+      tags: [Streams]
+      summary: Create a salary stream
+      operationId: createStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStreamParams'
+      responses:
+        '200':
+          description: Stream ID
+          content:
+            application/json:
+              schema:
+                type: integer
+                format: uint64
+                example: 42
+        '400':
+          $ref: '#/components/responses/InvalidParams'
+
+  /create_streams_batch:
+    post:
+      tags: [Streams]
+      summary: Create multiple streams atomically
+      operationId: createStreamsBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [employer, params]
+              properties:
+                employer:
+                  type: string
+                  example: GABC1234...
+                params:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/CreateStreamParams'
+      responses:
+        '200':
+          description: List of created stream IDs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: integer
+                  format: uint64
+        '400':
+          $ref: '#/components/responses/InvalidParams'
+
+  /withdraw:
+    post:
+      tags: [Employee]
+      summary: Withdraw claimable earnings
+      operationId: withdraw
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [employee, stream_id]
+              properties:
+                employee:
+                  type: string
+                  example: GXYZ9876...
+                stream_id:
+                  type: integer
+                  format: uint64
+                  example: 42
+      responses:
+        '200':
+          description: Amount withdrawn
+          content:
+            application/json:
+              schema:
+                type: integer
+                format: int128
+        '400':
+          $ref: '#/components/responses/NothingToWithdraw'
+
+  /top_up:
+    post:
+      tags: [Streams]
+      summary: Add funds to an active stream
+      operationId: topUp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [employer, stream_id, amount]
+              properties:
+                employer:
+                  type: string
+                  example: GABC1234...
+                stream_id:
+                  type: integer
+                  format: uint64
+                  example: 42
+                amount:
+                  type: integer
+                  format: int128
+                  example: 1000000000
+      responses:
+        '200':
+          description: Top-up successful
+        '400':
+          $ref: '#/components/responses/InvalidParams'
+
+  /pause_stream:
+    post:
+      tags: [Streams]
+      summary: Pause a stream
+      operationId: pauseStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StreamAction'
+      responses:
+        '200':
+          description: Stream paused
+        '400':
+          $ref: '#/components/responses/InvalidState'
+
+  /resume_stream:
+    post:
+      tags: [Streams]
+      summary: Resume a paused stream
+      operationId: resumeStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StreamAction'
+      responses:
+        '200':
+          description: Stream resumed
+        '400':
+          $ref: '#/components/responses/InvalidState'
+
+  /cancel_stream:
+    post:
+      tags: [Streams]
+      summary: Cancel a stream and settle balances
+      operationId: cancelStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StreamAction'
+      responses:
+        '200':
+          description: Stream cancelled; employee paid earned share, remainder refunded to employer
+        '400':
+          $ref: '#/components/responses/InvalidState'
+
+  /get_stream:
+    get:
+      tags: [Queries]
+      summary: Read stream state
+      operationId: getStream
+      parameters:
+        - name: stream_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: uint64
+      responses:
+        '200':
+          description: Stream object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stream'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /claimable:
+    get:
+      tags: [Queries]
+      summary: Query withdrawable amount
+      operationId: claimable
+      parameters:
+        - name: stream_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: uint64
+      responses:
+        '200':
+          description: Claimable amount right now
+          content:
+            application/json:
+              schema:
+                type: integer
+                format: int128
+                example: 5000000
+
+  /stream_count:
+    get:
+      tags: [Queries]
+      summary: Total streams created
+      operationId: streamCount
+      responses:
+        '200':
+          description: Total number of streams
+          content:
+            application/json:
+              schema:
+                type: integer
+                format: uint64
+                example: 142
+
+components:
+  schemas:
+    CreateStreamParams:
+      type: object
+      required: [employer, employee, token, deposit, rate_per_second]
+      properties:
+        employer:
+          type: string
+          description: Stellar address of the employer
+          example: GABC1234...
+        employee:
+          type: string
+          description: Stellar address of the employee
+          example: GXYZ9876...
+        token:
+          type: string
+          description: SEP-41 token contract address
+          example: CTOKEN...
+        deposit:
+          type: integer
+          format: int128
+          description: Total tokens deposited into escrow
+          example: 2592000000000
+        rate_per_second:
+          type: integer
+          format: int128
+          description: Tokens streamed per second
+          example: 1000000
+        stop_time:
+          type: integer
+          format: uint64
+          nullable: true
+          description: Optional Unix timestamp when stream stops
+
+    StreamAction:
+      type: object
+      required: [employer, stream_id]
+      properties:
+        employer:
+          type: string
+          example: GABC1234...
+        stream_id:
+          type: integer
+          format: uint64
+          example: 42
+
+    Stream:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: uint64
+        employer:
+          type: string
+        employee:
+          type: string
+        token:
+          type: string
+        deposit:
+          type: integer
+          format: int128
+        rate_per_second:
+          type: integer
+          format: int128
+        withdrawn:
+          type: integer
+          format: int128
+        start_time:
+          type: integer
+          format: uint64
+        stop_time:
+          type: integer
+          format: uint64
+          nullable: true
+        status:
+          type: string
+          enum: [Active, Paused, Cancelled, Exhausted]
+        last_withdraw_time:
+          type: integer
+          format: uint64
+
+  responses:
+    InvalidParams:
+      description: Invalid parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InvalidState:
+      description: Stream is not in a valid state for this operation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    AlreadyInitialized:
+      description: Contract already initialized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NothingToWithdraw:
+      description: No claimable balance
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Stream not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+          example: InvalidState
+        message:
+          type: string
+          example: Stream is already paused

@@ -11,6 +11,8 @@ require('dotenv').config();
 const compression = require('compression');
 const correlationId = require('./middleware/correlationId');
 const { apmMiddleware } = require('./middleware/apm');
+const requestLogger = require('./middleware/requestLogger');
+const logger = require('./services/logger');
 const metricsService = require('./services/metricsService');
 const { ExpressAdapter } = require('@bull-board/express');
 const { createBullBoard } = require('@bull-board/api');
@@ -24,17 +26,20 @@ createBullBoard({
   serverAdapter,
 });
 
-const { loadSecrets } = require('./services/secretsService');
+const { loadConfiguration } = require('./config/environment');
 const { closePool } = require('./services/dbService');
 const authMiddleware = require('./middleware/auth');
+const { globalLimiter, perUserLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
 const { versionHeader, deprecationWarning } = require('./middleware/versioning');
 const authRoutes = require('./routes/auth');
+const authAdminRoutes = require('./routes/auth-admin');
 const streamRoutes = require('./routes/streams');
 const tokenRoutes = require('./routes/tokens');
 const adminRoutes = require('./routes/admin');
 const governanceRoutes = require('./routes/governance');
 const userRoutes = require('./routes/users');
+const streamTemplateRoutes = require('./routes/streamTemplates');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,6 +47,7 @@ const startedAt = new Date();
 
 morgan.token('correlation-id', (req) => req.correlationId || '-');
 app.use(correlationId);
+app.use(requestLogger);
 app.use(apmMiddleware);
 
 const logFormat = ':remote-addr :method :url :status :res[content-length] - :response-time ms :correlation-id';
@@ -110,14 +116,14 @@ app.use((req, res, next) => {
       const compressedSize = parseInt(res.getHeader('Content-Length') || '0', 10);
       if (compressedSize > 0) {
         const ratio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
-        console.log(`[compression] ${req.method} ${req.path} encoding=${encoding} original=${originalSize}B compressed=${compressedSize}B ratio=${ratio}%`);
+        logger.debug(`[compression] ${req.method} ${req.path} encoding=${encoding} original=${originalSize}B compressed=${compressedSize}B ratio=${ratio}%`);
         // Record in metrics (as a percent value)
         try {
           metricsService.observeCompressionRatio(parseFloat(ratio), { encoding, method: req.method, path: req.path });
           metricsService.incrementCompressed({ encoding, method: req.method, path: req.path });
         } catch (err) {
           // don't break response flow for metrics failures
-          console.error('[metrics] failed to record compression metric', err && err.message ? err.message : err);
+          logger.error('[metrics] failed to record compression metric', err && err.message ? err.message : err);
         }
       }
     }
@@ -127,17 +133,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-  message: {
-    error: 'Too many requests from this IP, please try again later.',
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
+// Rate limiting — global (10k req/min) applied to all routes
+app.use(globalLimiter);
 
 // Logging
 if (process.env.NODE_ENV !== 'test') {
@@ -363,20 +360,24 @@ app.post('/streams/:id/withdraw', (req, res) => {
 
 // Auth routes (public — no authMiddleware)
 app.use('/auth', authRoutes);
+app.use('/auth/admin', authAdminRoutes);
+
+// Stream template routes
+app.use('/v1/api/stream-templates', authMiddleware, streamTemplateRoutes);
 
 // v1 API routes (current)
-app.use('/v1/api/streams', authMiddleware, streamRoutes);
-app.use('/v1/api/tokens', authMiddleware, tokenRoutes);
-app.use('/v1/api/admin', authMiddleware, adminRoutes);
-app.use('/v1/api/governance', authMiddleware, governanceRoutes);
-app.use('/v1/users', authMiddleware, userRoutes);
+app.use('/v1/api/streams', authMiddleware, perUserLimiter, streamRoutes);
+app.use('/v1/api/tokens', authMiddleware, perUserLimiter, tokenRoutes);
+app.use('/v1/api/admin', authMiddleware, perUserLimiter, adminRoutes);
+app.use('/v1/api/governance', authMiddleware, perUserLimiter, governanceRoutes);
+app.use('/v1/users', authMiddleware, perUserLimiter, userRoutes);
 
 // Legacy unversioned routes (deprecated)
-app.use('/api/streams', deprecationWarning, authMiddleware, streamRoutes);
-app.use('/api/tokens', deprecationWarning, authMiddleware, tokenRoutes);
-app.use('/api/admin', deprecationWarning, authMiddleware, adminRoutes);
-app.use('/api/governance', deprecationWarning, authMiddleware, governanceRoutes);
-app.use('/users', deprecationWarning, authMiddleware, userRoutes);
+app.use('/api/streams', deprecationWarning, authMiddleware, perUserLimiter, streamRoutes);
+app.use('/api/tokens', deprecationWarning, authMiddleware, perUserLimiter, tokenRoutes);
+app.use('/api/admin', deprecationWarning, authMiddleware, perUserLimiter, adminRoutes);
+app.use('/api/governance', deprecationWarning, authMiddleware, perUserLimiter, governanceRoutes);
+app.use('/users', deprecationWarning, authMiddleware, perUserLimiter, userRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -411,22 +412,22 @@ async function shutdown(signal) {
     return;
   }
   isShuttingDown = true;
-  console.log(`[Shutdown] ${signal} received, stopping new connections and waiting up to 30s for in-flight requests`);
+  logger.info(`[Shutdown] ${signal} received, stopping new connections and waiting up to 30s for in-flight requests`);
 
   const forceExit = setTimeout(() => {
-    console.error('[Shutdown] Force exiting after 30 seconds');
+    logger.error('[Shutdown] Force exiting after 30 seconds');
     process.exit(1);
   }, 30000);
 
   try {
     await stopServer();
     await closePool();
-    console.log('[Shutdown] Database connection closed');
+    logger.info('[Shutdown] Database connection closed');
   } catch (err) {
-    console.error('[Shutdown] Error during graceful shutdown', err);
+    logger.error('[Shutdown] Error during graceful shutdown', err);
   } finally {
     clearTimeout(forceExit);
-    console.log('[Shutdown] Complete');
+    logger.info('[Shutdown] Complete');
     process.exit(0);
   }
 }
@@ -436,16 +437,16 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function start() {
   try {
-    await loadSecrets();
+    await loadConfiguration();
 
     server = http.createServer(app);
     server.listen(PORT, () => {
-      console.log(`PayStream REST API server running on port ${PORT}`);
-      console.log(`API documentation available at http://localhost:${PORT}/api-docs`);
-      console.log(`Health check available at http://localhost:${PORT}/health`);
+      logger.info(`PayStream REST API server running on port ${PORT}`);
+      logger.info(`API documentation available at http://localhost:${PORT}/api-docs`);
+      logger.info(`Health check available at http://localhost:${PORT}/health`);
     });
   } catch (error) {
-    console.error('[Startup] Failed to initialize API server', error);
+    logger.error('[Startup] Failed to initialize API server', error);
     process.exit(1);
   }
 }
@@ -455,3 +456,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+// .
