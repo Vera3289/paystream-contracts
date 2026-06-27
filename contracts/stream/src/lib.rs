@@ -4,6 +4,7 @@
 
 mod access_control;
 mod events;
+pub mod state_machine;
 pub mod storage;
 pub mod types;
 mod validate;
@@ -24,12 +25,12 @@ use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use access_control::{
     require_admin, require_employee, require_employee_by_id, require_employer,
     require_employer_by_id, require_pending_admin, require_pending_employer,
-    is_delegate, is_employer,
+    is_delegate, is_employer, ERR_NOT_EMPLOYER,
 };
 use storage::{
-    add_pause_event, apply_proposal, claimable_amount, clear_pending_admin, clear_pending_employer,
+    add_fee_balance, add_pause_event, apply_proposal, claimable_amount, clear_pending_admin, clear_pending_employer,
     consume_admin_nonce, get_admin, get_admin_nonce, get_employee_streams, get_employer_streams,
-    get_fee_bps, get_fee_recipient, get_max_streams_per_employer, get_min_deposit,
+    get_fee_balance, get_fee_bps, get_fee_recipient, get_max_streams_per_employer, get_min_deposit,
     get_pause_history, get_pending_admin, get_pending_employer, has_voted, index_employee_stream,
     index_employer_stream, index_employer_streams_batch, load_proposal, load_stream, mark_voted,
     next_id, next_proposal_id, save_proposal, save_stream, set_admin, set_fee_bps,
@@ -52,6 +53,7 @@ use types::{
     ERR_OP_EXPIRED, ERR_OP_ALREADY_EXECUTED, ERR_THRESHOLD_NOT_MET, ERR_OP_NOT_FOUND,
 };
 use validate::{validate_create_stream, validate_max_streams, validate_top_up, MAX_RATE_PER_SECOND};
+use state_machine::{require_transition, require_not_terminal};
 
 /// Warning thresholds in seconds (#121).
 const WARN_7_DAYS: u64 = 7 * 24 * 3600;
@@ -114,6 +116,19 @@ impl StreamContract {
         consume_admin_nonce(&env, nonce);
         set_paused_cfg(&env, false);
         events::contract_paused(&env, false);
+    }
+
+    /// Emergency pause: no nonce required, for critical situations.
+    pub fn emergency_pause(env: Env, admin: Address) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        set_paused_cfg(&env, true);
+        events::contract_paused(&env, true);
+    }
+
+    /// Query whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::get_paused_cfg(&env)
     }
 
     pub fn set_min_deposit(env: Env, admin: Address, nonce: u64, amount: i128) {
@@ -273,6 +288,7 @@ impl StreamContract {
                 assert!(allowed_tokens.contains(&p.token), "{}", ERR_TOKEN_NOT_ALLOWED);
             }
 
+            check_and_bump_rate(&env, &employer);
             let token_client = token::Client::new(&env, &p.token);
             let _ = token_client.try_balance(&employer).expect(ERR_INVALID_TOKEN);
             
@@ -338,8 +354,8 @@ impl StreamContract {
             let cooldown_expiration = stream.last_withdraw_time.saturating_add(stream.cooldown_period);
             assert!(now >= cooldown_expiration, "{}", ERR_WITHDRAW_COOLDOWN);
         }
-        let amount = claimable_amount(&stream, now);
-        if amount == 0 {
+        let gross_amount = claimable_amount(&stream, now);
+        if gross_amount == 0 {
             return 0;
         }
 
@@ -347,30 +363,68 @@ impl StreamContract {
         stream.locked = true;
         save_stream(&env, &stream);
 
-        stream.withdrawn = stream.withdrawn.checked_add(amount).expect("withdrawn overflow");
+        let fee_bps = get_fee_bps(&env);
+        let fee_amount = if fee_bps > 0 {
+            gross_amount.checked_mul(fee_bps as i128).expect(ERR_OVERFLOW) / 10_000
+        } else {
+            0
+        };
+        let employee_amount = gross_amount.saturating_sub(fee_amount).max(0);
+        let net_amount = employee_amount;
+
+        stream.withdrawn = stream.withdrawn.checked_add(gross_amount).expect("withdrawn overflow");
         stream.last_withdraw_time = now;
         if stream.withdrawn >= stream.deposit {
+            require_transition(&StreamStatus::Active, &StreamStatus::Exhausted);
             stream.status = StreamStatus::Exhausted;
         }
 
         let token_client = token::Client::new(&env, &stream.token);
-        let employee_amount = amount;
-
-        token_client.transfer(&env.current_contract_address(), &employee, &employee_amount);
+        if fee_amount > 0 {
+            if let Some(fee_recipient) = get_fee_recipient(&env) {
+                token_client.transfer(&env.current_contract_address(), &fee_recipient, &fee_amount);
+                add_fee_balance(&env, &stream.token, fee_amount);
+                events::protocol_fee_collected(&env, stream_id, fee_amount, &fee_recipient);
+            }
+        }
+        token_client.transfer(&env.current_contract_address(), &employee, &net_amount);
         stream.locked = false;
         save_stream(&env, &stream);
-        events::withdrawn(&env, stream_id, &employee, employee_amount);
+        events::withdrawn(&env, stream_id, &employee, net_amount);
         maybe_warn_exhaustion(&env, &stream);
-        employee_amount
+        net_amount
+    }
+
+    pub fn withdraw_protocol_fees(env: Env, admin: Address, token: Address, amount: i128) {
+        admin.require_auth();
+        require_admin(&env, &admin);
+        assert!(amount > 0, "amount must be positive");
+        let balance = get_fee_balance(&env, &token);
+        assert!(balance >= amount, "insufficient fee balance");
+        let token_client = token::Client::new(&env, &token);
+        let fee_recipient = get_fee_recipient(&env).unwrap_or(admin.clone());
+        token_client.transfer(&env.current_contract_address(), &fee_recipient, &amount);
+        set_fee_balance(&env, &token, balance - amount);
+        events::protocol_fees_withdrawn(&env, &token, amount, &fee_recipient);
+    }
+
+    pub fn transfer_stream(env: Env, employee: Address, stream_id: u64, new_employee: Address) {
+        employee.require_auth();
+        let mut stream = require_employee_by_id(&env, &employee, stream_id);
+        assert!(stream.status == StreamStatus::Active || stream.status == StreamStatus::Paused, "stream not active");
+        stream.employee = new_employee.clone();
+        save_stream(&env, &stream);
+        events::stream_transferred(&env, stream_id, &employee, &new_employee);
     }
 
     pub fn top_up(env: Env, caller: Address, stream_id: u64, amount: i128) {
         caller.require_auth();
         validate_top_up(amount);
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
-        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
+        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "{}", ERR_NOT_EMPLOYER);
         assert!(stream.status != StreamStatus::Cancelled, "{}", ERR_STREAM_CANCELLED);
         assert!(stream.status != StreamStatus::Exhausted, "{}", ERR_STREAM_EXHAUSTED);
+        require_not_terminal(&stream.status);
 
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
@@ -382,9 +436,10 @@ impl StreamContract {
     pub fn pause_stream(env: Env, caller: Address, stream_id: u64) {
         caller.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
-        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
+        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "{}", ERR_NOT_EMPLOYER);
         assert!(stream.status != StreamStatus::Paused, "{}", ERR_ALREADY_PAUSED);
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
+        require_transition(&stream.status, &StreamStatus::Paused);
         let now = env.ledger().timestamp();
         stream.paused_at = now;
         stream.status = StreamStatus::Paused;
@@ -396,9 +451,10 @@ impl StreamContract {
     pub fn resume_stream(env: Env, caller: Address, stream_id: u64) {
         caller.require_auth();
         let mut stream = load_stream(&env, stream_id).expect("stream not found");
-        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "not authorized");
+        assert!(is_employer(&caller, &stream) || is_delegate(&caller, &stream), "{}", ERR_NOT_EMPLOYER);
         assert!(stream.status != StreamStatus::Active, "{}", ERR_NOT_PAUSED);
         assert_eq!(stream.status, StreamStatus::Paused, "stream not paused");
+        require_transition(&stream.status, &StreamStatus::Active);
         let now = env.ledger().timestamp();
         // Advance last_withdraw_time by the paused duration to exclude it while
         // preserving pre-pause accrued earnings.
@@ -418,6 +474,7 @@ impl StreamContract {
             stream.status == StreamStatus::Active || stream.status == StreamStatus::Paused,
             "stream already ended"
         );
+        require_transition(&stream.status, &StreamStatus::Cancelled);
 
         let now = env.ledger().timestamp();
         let claimable = claimable_amount(&stream, now);
@@ -739,3 +796,5 @@ impl StreamContract {
         storage_get_multisig_config(&env).expect(ERR_MULTISIG_NOT_CONFIGURED)
     }
 }
+// .
+// ..

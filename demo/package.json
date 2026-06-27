@@ -17,6 +17,7 @@
   },
   "scripts": {
     "start": "vite",
+    "test": "jest --passWithNoTests",
     "build": "tsc && vite build",
     "preview": "vite preview"
   }
