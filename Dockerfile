@@ -16,8 +16,6 @@ FROM base AS test
 COPY . .
 CMD ["cargo", "test"]
 
-# ── dev: watch mode with hot-reload on source changes ─────────────────────────
-FROM base AS dev
-RUN cargo install --locked cargo-watch --version 8.5.2
-# Source is mounted at runtime via volume; do not COPY here
-CMD ["cargo", "watch", "-x", "test"]
+# ── output stage: WASM artifacts only (~scratch-sized) ───────────────────────
+FROM scratch AS output
+COPY --from=builder /app/target/wasm32-unknown-unknown/release/*.wasm /contracts/

@@ -18,17 +18,12 @@ services:
       - cargo-cache:/usr/local/cargo/registry
     command: cargo test
 
-  # Development: re-runs tests on every file save
-  dev:
+  output:
     build:
       context: .
-      target: dev
-    volumes:
-      - .:/app                                    # live source mount
-      - cargo-cache:/usr/local/cargo/registry     # persistent registry cache
-      - cargo-target:/app/target                  # persistent build cache
-    command: cargo watch -x test
+      target: output
+    image: paystream-contracts:output
 
 volumes:
   cargo-cache:
-  cargo-target:
+  esdata:
