@@ -295,8 +295,28 @@ fn test_stream_exhausted_when_fully_withdrawn() {
 }
 
 #[test]
-#[should_panic(expected = "stream not active")]
-fn test_cannot_withdraw_from_cancelled_stream() {
+#[should_panic(expected = "employer and employee must be different addresses")]
+fn test_self_transfer_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // employer == employee → must panic
+    client.create_stream(&employer, &employer, &token_id, &3600, &1, &0);
+}
+
+#[test]
+fn test_address_book() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let trusted = Address::generate(&env);
+
+    client.addr_book_add(&owner, &0u32, &trusted);
+    let result = client.addr_book_get(&owner, &0u32);
+    assert_eq!(result, Some(trusted));
+}
     let (env, client) = setup();
     let admin = Address::generate(&env);
     let employer = Address::generate(&env);
