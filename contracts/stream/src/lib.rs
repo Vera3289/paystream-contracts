@@ -3,13 +3,15 @@
 mod events;
 mod storage;
 mod types;
+mod validate;
 
 #[cfg(test)]
 mod test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
-use storage::{claimable_amount, get_admin, load_stream, next_id, save_stream, set_admin};
+use storage::{claimable_amount, load_stream, next_id, save_stream, set_admin};
 use types::{DataKey, Stream, StreamStatus};
+use validate::{address_book_add, address_book_get, require_distinct};
 
 #[contract]
 pub struct StreamContract;
@@ -34,6 +36,7 @@ impl StreamContract {
         stop_time: u64,
     ) -> u64 {
         employer.require_auth();
+        require_distinct(&employer, &employee);
         assert!(deposit > 0, "deposit must be positive");
         assert!(rate_per_second > 0, "rate must be positive");
 
@@ -180,5 +183,16 @@ impl StreamContract {
     /// Total streams created.
     pub fn stream_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::StreamCount).unwrap_or(0)
+    }
+
+    /// Save a trusted address into the caller's address book under a numeric label.
+    pub fn addr_book_add(env: Env, owner: Address, label: u32, addr: Address) {
+        owner.require_auth();
+        address_book_add(&env, &owner, label, &addr);
+    }
+
+    /// Retrieve an address from the caller's address book by label.
+    pub fn addr_book_get(env: Env, owner: Address, label: u32) -> Option<Address> {
+        address_book_get(&env, &owner, label)
     }
 }
