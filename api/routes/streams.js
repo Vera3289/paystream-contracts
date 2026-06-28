@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, param, query, validationResult } = require('express-validator');
 const stellarService = require('../services/stellarService');
+const workflowService = require('../services/streamWorkflowService');
 const router = express.Router();
 
 /**
@@ -88,6 +89,93 @@ const router = express.Router();
  *                 transaction_hash:
  *                   type: string
  */
+router.post('/wizard/preview', [
+  body('recipient').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid recipient address'),
+  body('token').isString().notEmpty().withMessage('Token is required'),
+  body('amount').isString().matches(/^[0-9]+$/).withMessage('Invalid amount'),
+  body('balance').isString().matches(/^[0-9]+$/).withMessage('Invalid balance'),
+], (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation failed', details: errors.array() });
+    }
+
+    const preview = workflowService.buildStreamWizardPreview(req.body);
+    return res.json({ success: true, preview });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/approvals', [
+  body('title').isString().notEmpty().withMessage('Approval title is required'),
+  body('requestedBy').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid requester address'),
+  body('approvers').isArray({ min: 1 }).withMessage('At least one approver is required'),
+], (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation failed', details: errors.array() });
+    }
+
+    const approval = workflowService.createApprovalRequest(req.body);
+    return res.status(201).json({ success: true, approval });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/approvals/:id/approve', [
+  body('approver').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid approver address'),
+], (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation failed', details: errors.array() });
+    }
+
+    const approval = workflowService.approveApprovalRequest(req.params.id, req.body.approver, req.body.note);
+    return res.json({ success: true, approval });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/approvals/:id/reject', [
+  body('approver').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid approver address'),
+  body('reason').isString().notEmpty().withMessage('A rejection reason is required'),
+], (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation failed', details: errors.array() });
+    }
+
+    const approval = workflowService.rejectApprovalRequest(req.params.id, req.body.approver, req.body.reason);
+    return res.json({ success: true, approval });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/approvals/:id/override', [
+  body('actor').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid override actor address'),
+  body('reason').isString().notEmpty().withMessage('An override reason is required'),
+], (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation failed', details: errors.array() });
+    }
+
+    const approval = workflowService.overrideApprovalRequest(req.params.id, req.body.actor, req.body.reason);
+    return res.json({ success: true, approval });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/create', [
   body('employer').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employer address'),
   body('employee').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employee address'),

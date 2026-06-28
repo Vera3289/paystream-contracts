@@ -3,8 +3,10 @@
  * Handles interactions with Stellar network and smart contracts
  */
 
-const { Server, Networks, TransactionBuilder, BASE_FEE } = require('stellar-sdk');
-const { xdr, SorobanRpc } = require('soroban-client');
+const stellarSdk = require('stellar-sdk');
+const { Networks, TransactionBuilder, BASE_FEE } = stellarSdk;
+const { SorobanRpc } = stellarSdk;
+const { Server } = stellarSdk.Horizon;
 
 class StellarService {
   constructor() {
