@@ -1,0 +1,19 @@
+name: Logging Infrastructure
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate-logging-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate logging compose file
+        run: python - <<'PY'
+import os
+print('logging compose exists:', os.path.exists('ops/logging/docker-compose.logging.yml'))
+print('logstash config exists:', os.path.exists('ops/logging/logstash/pipeline/logstash.conf'))
+PY

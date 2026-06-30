@@ -1,0 +1,36 @@
+# SSL/TLS extension — overlay on top of docker-compose.dev.yml
+# Usage: docker compose -f docker-compose.dev.yml -f infra/ssl/docker-compose.ssl.yml up
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/ssl/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_certs:/etc/letsencrypt:ro
+    environment:
+      - DOMAIN=${DOMAIN}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_certs:/etc/letsencrypt
+    # Renew every 12 hours; certbot skips if cert has > 30 days remaining
+    entrypoint: >
+      /bin/sh -c 'trap exit TERM;
+        while :; do
+          certbot renew --webroot --webroot-path=/var/www/certbot --quiet;
+          sleep 12h & wait $${!};
+        done'
+    restart: unless-stopped
+
+volumes:
+  certbot_www:
+  certbot_certs:

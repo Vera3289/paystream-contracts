@@ -1,0 +1,25 @@
+name: Demo Snapshot Tests
+
+on:
+  push:
+    paths:
+      - 'demo/**'
+  pull_request:
+    paths:
+      - 'demo/**'
+
+jobs:
+  snapshot-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install demo deps
+        working-directory: demo
+        run: npm ci
+      - name: Run snapshot tests
+        working-directory: demo
+        run: npm test --silent

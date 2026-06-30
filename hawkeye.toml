@@ -1,0 +1,7 @@
+headerPath = "license-header.txt"
+
+[[includes]]
+paths = ["contracts/**/*.rs"]
+
+[[excludes]]
+paths = ["**/test_snapshots/**"]

@@ -1,0 +1,25 @@
+{
+  "name": "@paystream/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for PayStream Soroban contracts",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^16.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
+

@@ -1,0 +1,29 @@
+services:
+  # Build contracts to WASM
+  build:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+
+  # Run tests once
+  test:
+    build:
+      context: .
+      target: test
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+    command: cargo test
+
+  output:
+    build:
+      context: .
+      target: output
+    image: paystream-contracts:output
+
+volumes:
+  cargo-cache:
+  esdata:
