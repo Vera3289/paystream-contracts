@@ -20,7 +20,7 @@
   "author": "PayStream Team",
   "license": "Apache-2.0",
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "^3.1061.0",
+    "@aws-sdk/client-secrets-manager": "^3.1076.0",
     "@bull-board/api": "^8.0.1",
     "@bull-board/express": "^7.1.5",
     "bullmq": "^5.79.2",
