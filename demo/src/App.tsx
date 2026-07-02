@@ -3,37 +3,56 @@ import React, { useState, useEffect, useId } from "react";
 import { usePayStream } from "./usePayStream";
 import { useTransactionHistory } from "./useTransactionHistory";
 import { CONFIG } from "./config";
+import { useFiatPrices, AVAILABLE_FIAT_CURRENCIES, getTokenPricingMetadata } from "./useFiatPrice";
 import { useStreamTemplates, DEFAULT_TEMPLATES, StreamTemplate } from "./useStreamTemplates";
 import { exportAllHistory } from "./csvExport";
 import { EmployerDashboard } from "./EmployerDashboard";
 import { EmployeeDashboard } from "./EmployeeDashboard";
 import { StreamStatusCard } from "./StreamStatusCard";
+import { BatchCreateStreams } from "./BatchCreateStreams";
+import { WalletButton } from "./WalletButton";
+import { WalletModal } from "./WalletModal";
+import { StreamCreationForm } from "./StreamCreationForm";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { OnboardingWizard, shouldShowOnboarding } from "./OnboardingWizard";
 
 const STROOP = 10_000_000n; // 1 XLM in stroops
 
 // ─── Dark mode ───────────────────────────────────────────────────────────────
 
 function useDarkMode(): [boolean, () => void] {
-  const [dark, setDark] = useState<boolean>(() => {
-    const stored = localStorage.getItem("paystream-dark");
-    if (stored !== null) return stored === "true";
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
-  });
+  // Issue #240: Initialize to false (safe SSR default) and read localStorage
+  // only after mount to avoid hydration mismatches.
+  const [dark, setDark] = useState<boolean>(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    // Runs client-side only — safe to access window/localStorage here.
+    const stored = localStorage.getItem("paystream-dark");
+    const prefersDark =
+      stored !== null
+        ? stored === "true"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    setDark(prefersDark);
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     localStorage.setItem("paystream-dark", String(dark));
-  }, [dark]);
+  }, [dark, mounted]);
 
-  // Also respond to OS-level changes when no manual override has been set
+  // Respond to OS-level changes when no manual override has been set
   useEffect(() => {
+    if (!mounted) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e: MediaQueryListEvent) => {
       if (localStorage.getItem("paystream-dark") === null) setDark(e.matches);
     };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
-  }, []);
+  }, [mounted]);
 
   return [dark, () => setDark((d) => !d)];
 }
@@ -89,14 +108,54 @@ function estimatedDuration(deposit: string, rate: string): string | null {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-type AppView = "demo" | "dashboard" | "employee";
+type AppView = "demo" | "dashboard" | "employee" | "batch" | "detail";
 
 export default function App() {
   const [dark, toggleDark] = useDarkMode();
   const [view, setView] = useState<AppView>("demo");
+  const [showOnboarding, setShowOnboarding] = useState(() => shouldShowOnboarding());
   const { publicKey, streams, claimableAmounts, error, loading, connect, loadStream, createStream, withdraw } =
     usePayStream();
   const history = useTransactionHistory();
+
+  // Employer actions for stream detail page
+  const employer = useEmployerDashboard(publicKey);
+
+  // Detail view state
+  const [detailStreamId, setDetailStreamId] = useState<bigint | null>(null);
+
+  // ── Hash routing (#stream/{id}) ───────────────────────────────────────────
+  useEffect(() => {
+    const handleHash = async () => {
+      const hash = window.location.hash;
+      const match = hash.match(/^#stream\/(\d+)$/);
+      if (match) {
+        const id = BigInt(match[1]);
+        setDetailStreamId(id);
+        setView("detail");
+        // Ensure the stream is loaded
+        const already = streams.find((s) => s.id === id);
+        if (!already) await loadStream(id);
+      }
+    };
+    handleHash();
+    window.addEventListener("hashchange", handleHash);
+    return () => window.removeEventListener("hashchange", handleHash);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const navigateToDetail = (streamId: bigint) => {
+    window.location.hash = `#stream/${streamId}`;
+  };
+
+  const navigateBack = () => {
+    window.location.hash = "";
+    setView("demo");
+    setDetailStreamId(null);
+  };
+
+  // Wallet modal state
+  const [walletModalOpen, setWalletModalOpen] = useState(false);
 
   // Create stream form state
   const [employee, setEmployee] = useState("");
@@ -107,15 +166,33 @@ export default function App() {
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const [submitted, setSubmitted] = useState(false);
 
+  const {
+    fiatCurrency,
+    setFiatCurrency,
+    getPriceForToken,
+    loading: priceLoading,
+    error: priceError,
+    lastUpdated,
+  } = useFiatPrices();
+
   // Load stream form state
   const [lookupId, setLookupId] = useState("");
 
   // Transaction history panel
   const [historyStreamId, setHistoryStreamId] = useState<bigint | null>(null);
+  // CSV date-range filter (#233)
+  const [csvFrom, setCsvFrom] = useState("");
+  const [csvTo, setCsvTo] = useState("");
 
   // Stream templates (#117)
   const { templates, save: saveTemplate, remove: removeTemplate } = useStreamTemplates();
   const [templateName, setTemplateName] = useState("");
+
+  const handleWalletConnect = async (walletType: "freighter") => {
+    if (walletType === "freighter") {
+      await connect();
+    }
+  };
 
   const applyTemplate = (tpl: StreamTemplate) => {
     setEmployee("");
@@ -134,6 +211,25 @@ export default function App() {
   };
 
   const duration = estimatedDuration(deposit, rate);
+
+  const VIEWS: AppView[] = ["demo", "dashboard", "employee"];
+
+  const handleTabKeyDown = (e: React.KeyboardEvent, current: AppView) => {
+    const idx = VIEWS.indexOf(current);
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setView(VIEWS[(idx + 1) % VIEWS.length]);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setView(VIEWS[(idx - 1 + VIEWS.length) % VIEWS.length]);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setView(VIEWS[0]);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setView(VIEWS[VIEWS.length - 1]);
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -164,30 +260,47 @@ export default function App() {
   };
 
   const handleExportCsv = async (streamId: bigint) => {
-    await exportAllHistory(streamId, async (cursor) => {
-      // Re-use the Horizon fetch logic from useTransactionHistory by calling
-      // the hook's fetchHistory and reading the internal cursor. Since the hook
-      // manages its own state we replicate the fetch inline here for a clean
-      // one-shot export without mutating the panel's displayed records.
-      const PAGE_SIZE = 200; // larger page for export efficiency
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE), order: "desc" });
-      if (cursor) params.set("cursor", cursor);
-      const HORIZON_BASE = "https://horizon-testnet.stellar.org";
-      const res = await fetch(`${HORIZON_BASE}/accounts/${streamId}/operations?${params}`);
-      if (!res.ok) throw new Error(`Horizon error: ${res.status}`);
-      const data = await res.json() as {
-        _embedded: { records: Array<Record<string, unknown>> };
-      };
-      const ops = data._embedded.records;
-      const records = ops.map((op) => ({
-        id: String(op.id),
-        timestamp: String(op.created_at ?? ""),
-        type: String(op.type ?? "").replace(/_/g, " "),
-        amount: typeof op.amount === "string" ? `${op.amount} XLM` : null,
-      }));
-      const lastToken = ops.length > 0 ? String(ops[ops.length - 1].paging_token ?? "") : null;
-      return { records, nextCursor: ops.length === PAGE_SIZE ? lastToken : null };
-    });
+    const stream = streams.find((s) => s.id === streamId);
+    const range =
+      csvFrom || csvTo
+        ? { from: csvFrom ? new Date(csvFrom) : undefined, to: csvTo ? new Date(csvTo) : undefined }
+        : undefined;
+    await exportAllHistory(
+      streamId,
+      async (cursor) => {
+        // Re-use the Horizon fetch logic from useTransactionHistory by calling
+        // the hook's fetchHistory and reading the internal cursor. Since the hook
+        // manages its own state we replicate the fetch inline here for a clean
+        // one-shot export without mutating the panel's displayed records.
+        const PAGE_SIZE = 200; // larger page for export efficiency
+        const params = new URLSearchParams({ limit: String(PAGE_SIZE), order: "desc" });
+        if (cursor) params.set("cursor", cursor);
+        const HORIZON_BASE = "https://horizon-testnet.stellar.org";
+        const res = await fetch(`${HORIZON_BASE}/accounts/${streamId}/operations?${params}`);
+        if (!res.ok) throw new Error(`Horizon error: ${res.status}`);
+        const data = await res.json() as {
+          _embedded: { records: Array<Record<string, unknown>> };
+        };
+        const ops = data._embedded.records;
+        const records = ops.map((op) => ({
+          id: String(op.id),
+          timestamp: String(op.created_at ?? ""),
+          type: String(op.type ?? "").replace(/_/g, " "),
+          amount: typeof op.amount === "string" ? `${op.amount} XLM` : null,
+        }));
+        const lastToken = ops.length > 0 ? String(ops[ops.length - 1].paging_token ?? "") : null;
+        return { records, nextCursor: ops.length === PAGE_SIZE ? lastToken : null };
+      },
+      range,
+      stream?.employee ?? "",
+      stream?.token ?? ""
+    );
+  };
+
+  const getTokenLabel = (token: string) => {
+    const meta = getTokenPricingMetadata(token);
+    if (meta) return meta.symbol;
+    return token.length > 12 ? `${token.slice(0, 6)}…${token.slice(-4)}` : token;
   };
 
   // Re-validate on change after first submit attempt
@@ -196,32 +309,70 @@ export default function App() {
   }, [employee, token, deposit, rate, stopTime, submitted]);
 
   return (
-    <div className="app-root">
+    <div className="app-root" id="main-content">
+      {showOnboarding && (
+        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      )}
       {/* ── Header ── */}
       <header className="app-header" role="banner">
-        <h1>💸 PayStream Demo</h1>
+        <div className="header-left">
+          <h1>💸 PayStream Demo</h1>
+          <button
+            className="hamburger-btn"
+            aria-label={navOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={navOpen}
+            aria-controls="main-nav"
+            onClick={() => setNavOpen((o) => !o)}
+          >
+            <span className="hamburger-bar" />
+            <span className="hamburger-bar" />
+            <span className="hamburger-bar" />
+          </button>
+        </div>
         <div className="header-right">
           <p className="subtitle">Testnet — real-time salary streaming on Stellar</p>
-          <button
-            onClick={toggleDark}
-            className="toggle-btn"
-            aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-pressed={dark}
-          >
-            {dark ? "☀️ Light" : "🌙 Dark"}
-          </button>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <WalletButton
+              publicKey={publicKey}
+              loading={loading}
+              onClick={() => setWalletModalOpen(true)}
+            />
+            <button
+              onClick={toggleDark}
+              className="toggle-btn"
+              aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+              aria-pressed={dark}
+            >
+              {dark ? "☀️ Light" : "🌙 Dark"}
+            </button>
+          </div>
         </div>
       </header>
 
+      {/* ── Wallet Modal ── */}
+      <WalletModal
+        isOpen={walletModalOpen}
+        onClose={() => setWalletModalOpen(false)}
+        onConnect={handleWalletConnect}
+        loading={loading}
+        error={error}
+      />
+
+      {/* ── Nav overlay ── */}
+      {navOpen && (
+        <div className="nav-overlay" aria-hidden="true" onClick={() => setNavOpen(false)} />
+      )}
+
       {/* ── View tabs ── */}
-      <nav className="view-tabs" role="tablist" aria-label="Application views">
+      <nav id="main-nav" className={`view-tabs${navOpen ? " mobile-nav-open" : ""}`} role="tablist" aria-label="Application views">
         <button
           role="tab"
           id="tab-demo"
           aria-selected={view === "demo"}
           aria-controls="panel-demo"
           className={`tab-btn${view === "demo" ? " tab-active" : ""}`}
-          onClick={() => setView("demo")}
+          onClick={() => { setView("demo"); setNavOpen(false); }}
+          onKeyDown={(e) => handleTabKeyDown(e, "demo")}
         >
           🖥 Stream Demo
         </button>
@@ -231,7 +382,8 @@ export default function App() {
           aria-selected={view === "dashboard"}
           aria-controls="panel-dashboard"
           className={`tab-btn${view === "dashboard" ? " tab-active" : ""}`}
-          onClick={() => setView("dashboard")}
+          onClick={() => { setView("dashboard"); setNavOpen(false); }}
+          onKeyDown={(e) => handleTabKeyDown(e, "dashboard")}
         >
           💼 Employer Dashboard
         </button>
@@ -241,11 +393,66 @@ export default function App() {
           aria-selected={view === "employee"}
           aria-controls="panel-employee"
           className={`tab-btn${view === "employee" ? " tab-active" : ""}`}
-          onClick={() => setView("employee")}
+          onClick={() => { setView("employee"); setNavOpen(false); }}
+          onKeyDown={(e) => handleTabKeyDown(e, "employee")}
         >
           💳 Employee Earnings
         </button>
+        <button
+          role="tab"
+          id="tab-batch"
+          aria-selected={view === "batch"}
+          aria-controls="panel-batch"
+          className={`tab-btn${view === "batch" ? " tab-active" : ""}`}
+          onClick={() => { setView("batch"); setNavOpen(false); }}
+        >
+          📋 Batch Create
+        </button>
       </nav>
+
+      {/* ── Stream Detail panel ── */}
+      {view === "detail" && detailStreamId !== null && (() => {
+        const detailStream = streams.find((s) => s.id === detailStreamId);
+        if (!detailStream) return (
+          <main style={{ padding: 24 }}>
+            <button className="btn btn-secondary" onClick={navigateBack}>← Back</button>
+            <p style={{ marginTop: 16 }}>
+              {loading ? "Loading stream…" : `Stream #${detailStreamId} not found.`}
+            </p>
+          </main>
+        );
+        const key = detailStreamId.toString();
+        const claimable = claimableAmounts[key] ?? 0n;
+        return (
+          <ErrorBoundary label="Stream Detail">
+            <StreamDetailPage
+              stream={detailStream}
+              claimable={claimable}
+              publicKey={publicKey}
+              onBack={navigateBack}
+              onWithdraw={withdraw ? (id) => withdraw(id) : undefined}
+              onPause={(id) => employer.handleAction("pause", id)}
+              onResume={(id) => employer.handleAction("resume", id)}
+              onCancel={(id) => employer.handleAction("cancel", id)}
+              onTopUp={employer.handleTopUp}
+              loading={loading || employer.loading}
+              actionLoading={employer.actionLoading}
+            />
+          </ErrorBoundary>
+        );
+      })()}
+
+      {/* ── Batch Create panel ── */}
+      <div
+        role="tabpanel"
+        id="panel-batch"
+        aria-labelledby="tab-batch"
+        hidden={view !== "batch"}
+      >
+        <ErrorBoundary label="Batch Create">
+          <BatchCreateStreams walletPublicKey={publicKey} />
+        </ErrorBoundary>
+      </div>
 
       {/* ── Employer Dashboard panel ── */}
       <div
@@ -254,7 +461,9 @@ export default function App() {
         aria-labelledby="tab-dashboard"
         hidden={view !== "dashboard"}
       >
-        <EmployerDashboard walletPublicKey={publicKey} />
+        <ErrorBoundary label="Employer Dashboard">
+          <EmployerDashboard walletPublicKey={publicKey} />
+        </ErrorBoundary>
       </div>
 
       {/* ── Employee Earnings panel ── */}
@@ -264,7 +473,9 @@ export default function App() {
         aria-labelledby="tab-employee"
         hidden={view !== "employee"}
       >
-        <EmployeeDashboard walletPublicKey={publicKey} />
+        <ErrorBoundary label="Employee Earnings">
+          <EmployeeDashboard walletPublicKey={publicKey} />
+        </ErrorBoundary>
       </div>
 
       {/* ── Demo panel ── */}
@@ -274,6 +485,7 @@ export default function App() {
         aria-labelledby="tab-demo"
         hidden={view !== "demo"}
       >
+        <ErrorBoundary label="Stream Demo">
         {/* ── Wallet ── */}
         <section className="card" aria-labelledby="wallet-heading">
           <h2 id="wallet-heading">Wallet</h2>
@@ -289,6 +501,42 @@ export default function App() {
               {loading ? "Connecting…" : "Connect Freighter"}
             </button>
           )}
+        </section>
+
+        {/* ── Fiat settings ── */}
+        <section className="card" aria-labelledby="fiat-settings-heading">
+          <h2 id="fiat-settings-heading">Fiat Currency</h2>
+          <div className="field" style={{ maxWidth: 320 }}>
+            <label htmlFor="fiat-currency" className="field-label">
+              Preferred currency
+            </label>
+            <select
+              id="fiat-currency"
+              className="input"
+              value={fiatCurrency}
+              onChange={(e) => setFiatCurrency(e.target.value as any)}
+            >
+              {AVAILABLE_FIAT_CURRENCIES.map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">
+              Saved in browser settings. Prices refresh every 60 seconds.
+            </p>
+            {priceError && (
+              <p role="alert" className="field-error">
+                Unable to update prices: {priceError}
+              </p>
+            )}
+            {!priceError && (
+              <p className="field-hint">
+                Last updated {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : "…"}.
+                {priceLoading ? " Updating…" : ""}
+              </p>
+            )}
+          </div>
         </section>
 
         {/* ── Error banner ── */}
@@ -343,64 +591,12 @@ export default function App() {
         {/* ── Create Stream ── */}
         <section className="card" aria-labelledby="create-heading">
           <h2 id="create-heading">Create Stream</h2>
-          <form onSubmit={handleCreate} noValidate aria-label="Create a new salary stream">
-            <Field
-              label="Employee address"
-              value={employee}
-              onChange={setEmployee}
-              placeholder="G..."
-              error={formErrors.employee}
-              required
-            />
-            <Field
-              label="Token contract ID"
-              value={token}
-              onChange={setToken}
-              placeholder="C..."
-              error={formErrors.token}
-              required
-            />
-            <Field
-              label="Deposit (XLM)"
-              value={deposit}
-              onChange={setDeposit}
-              type="number"
-              min="0"
-              step="any"
-              error={formErrors.deposit}
-              required
-            />
-            <Field
-              label="Rate (stroops/sec)"
-              value={rate}
-              onChange={setRate}
-              type="number"
-              min="0"
-              step="1"
-              error={formErrors.rate}
-              required
-            />
-            <Field
-              label="Stop time (unix timestamp, 0 = indefinite)"
-              value={stopTime}
-              onChange={setStopTime}
-              type="number"
-              min="0"
-              step="1"
-              error={formErrors.stopTime}
-            />
-            {duration && (
-              <p className="duration-hint" aria-live="polite">
-                ⏱ Estimated stream duration: <strong>{duration}</strong>
-              </p>
-            )}
-            <button type="submit" disabled={loading || !publicKey} className="btn" aria-busy={loading}>
-              {loading ? "Creating…" : "Create Stream"}
-            </button>
-            {!publicKey && (
-              <p className="field-hint">Connect your wallet to create a stream.</p>
-            )}
-          </form>
+          <StreamCreationForm
+            defaultToken={CONFIG.defaultToken}
+            onSubmit={createStream}
+            loading={loading}
+            walletConnected={!!publicKey}
+          />
         </section>
 
         {/* ── Load Stream ── */}
@@ -437,6 +633,9 @@ export default function App() {
                     <StreamStatusCard
                       stream={s}
                       claimable={claimable}
+                      tokenSymbol={getTokenLabel(s.token)}
+                      fiatCurrency={fiatCurrency}
+                      tokenPrice={getPriceForToken(s.token) ?? null}
                       onWithdraw={
                         s.status === "Active" && publicKey === s.employee
                           ? () => withdraw(s.id)
@@ -446,6 +645,15 @@ export default function App() {
                       onExportCsv={() => handleExportCsv(s.id)}
                       loading={loading}
                     >
+                      <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)" }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => navigateToDetail(s.id)}
+                          aria-label={`View full details for stream ${key}`}
+                        >
+                          🔍 View Detail
+                        </button>
+                      </div>
                       {/* Inline history panel */}
                       {historyStreamId === s.id && (
                         <div
@@ -492,14 +700,37 @@ export default function App() {
                             </button>
                           )}
                           {history.records.length > 0 && (
-                            <button
-                              onClick={() => handleExportCsv(s.id)}
-                              className="btn btn-secondary"
-                              style={{ marginTop: 8 }}
-                              aria-label={`Export all history for stream ${key} as CSV`}
-                            >
-                              Export all as CSV
-                            </button>
+                            <div style={{ marginTop: 10 }}>
+                              <div className="csv-range-row">
+                                <label>
+                                  From
+                                  <input
+                                    type="date"
+                                    value={csvFrom}
+                                    onChange={(e) => setCsvFrom(e.target.value)}
+                                    max={csvTo || undefined}
+                                    aria-label="Export date range start"
+                                  />
+                                </label>
+                                <label>
+                                  To
+                                  <input
+                                    type="date"
+                                    value={csvTo}
+                                    onChange={(e) => setCsvTo(e.target.value)}
+                                    min={csvFrom || undefined}
+                                    aria-label="Export date range end"
+                                  />
+                                </label>
+                              </div>
+                              <button
+                                onClick={() => handleExportCsv(s.id)}
+                                className="btn btn-secondary"
+                                aria-label={`Export all history for stream ${key} as CSV`}
+                              >
+                                ⬇ Export as CSV
+                              </button>
+                            </div>
                           )}
                         </div>
                       )}
@@ -510,6 +741,7 @@ export default function App() {
             </ul>
           </section>
         )}
+        </ErrorBoundary>
       </main>
     </div>
   );
@@ -564,16 +796,6 @@ function Field({
         </span>
       )}
     </div>
-  );
-}
-
-// ─── StatusBadge ─────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <span className={`status-badge status-${status.toLowerCase()}`} aria-label={`Status: ${status}`}>
-      {status}
-    </span>
   );
 }
 

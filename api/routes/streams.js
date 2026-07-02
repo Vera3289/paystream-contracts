@@ -2,6 +2,9 @@ const express = require('express');
 const { body, param, query, validationResult } = require('express-validator');
 const stellarService = require('../services/stellarService');
 const workflowService = require('../services/streamWorkflowService');
+const cache = require('../services/cacheService');
+const idempotencyMiddleware = require('../middleware/idempotency');
+const { auditLog } = require('../middleware/auditLogger');
 const router = express.Router();
 
 /**
@@ -84,10 +87,23 @@ const router = express.Router();
  *               properties:
  *                 success:
  *                   type: boolean
+ *                   example: true
  *                 stream_id:
  *                   type: integer
+ *                   example: 101
  *                 transaction_hash:
  *                   type: string
+ *                   example: "a1b2c3d4..."
+ *       400:
+ *         $ref: '#/components/responses/ValidationError'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       422:
+ *         description: Idempotency error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.post('/wizard/preview', [
   body('recipient').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid recipient address'),
@@ -176,7 +192,7 @@ router.post('/approvals/:id/override', [
   }
 });
 
-router.post('/create', [
+router.post('/create', idempotencyMiddleware, auditLog('create_stream', 'stream'), [
   body('employer').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employer address'),
   body('employee').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employee address'),
   body('token_address').isString().matches(/^C[A-Z0-9]{62}$/).withMessage('Invalid token contract address'),
@@ -262,6 +278,27 @@ router.post('/create', [
  *     responses:
  *       200:
  *         description: Stream information retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 stream:
+ *                   type: object
+ *                   properties:
+ *                     id: { type: 'integer', example: 101 }
+ *                     employer: { $ref: '#/components/schemas/Address' }
+ *                     employee: { $ref: '#/components/schemas/Address' }
+ *                     token: { $ref: '#/components/schemas/Address' }
+ *                     deposit: { $ref: '#/components/schemas/Amount' }
+ *                     withdrawn: { $ref: '#/components/schemas/Amount' }
+ *                     rate_per_second: { $ref: '#/components/schemas/Rate' }
+ *                     status: { $ref: '#/components/schemas/StreamStatus' }
+ *       404:
+ *         description: Stream not found
  */
 router.get('/:stream_id', [
   param('stream_id').isInt({ min: 1 }).withMessage('Invalid stream ID'),
@@ -277,12 +314,23 @@ router.get('/:stream_id', [
 
     const { stream_id } = req.params;
 
+    const cached = await cache.getStream(stream_id);
+    if (cached) {
+      res.set('Cache-Control', 'public, max-age=10');
+      res.set('X-Cache', 'HIT');
+      return res.json({ success: true, stream: cached });
+    }
+
     const result = await stellarService.callContractMethod({
       contractId: stellarService.streamContractId,
       functionName: 'get_stream',
       args: [BigInt(stream_id)]
     });
 
+    await cache.setStream(stream_id, result);
+
+    res.set('Cache-Control', 'public, max-age=10');
+    res.set('X-Cache', 'MISS');
     res.json({
       success: true,
       stream: result,
@@ -393,8 +441,27 @@ router.get('/:stream_id/claimable', [
  *             properties:
  *               employee:
  *                 $ref: '#/components/schemas/Address'
+ *     responses:
+ *       200:
+ *         description: Withdrawal successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 amount_withdrawn:
+ *                   $ref: '#/components/schemas/Amount'
+ *                   example: "5000000"
+ *                 transaction_hash:
+ *                   type: string
+ *                   example: "b2c3d4e5..."
+ *       400:
+ *         $ref: '#/components/responses/ValidationError'
  */
-router.post('/:stream_id/withdraw', [
+router.post('/:stream_id/withdraw', auditLog('withdraw', 'stream'), [
   param('stream_id').isInt({ min: 1 }).withMessage('Invalid stream ID'),
   body('employee').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employee address'),
 ], async (req, res, next) => {
@@ -426,12 +493,132 @@ router.post('/:stream_id/withdraw', [
       ]
     });
 
+    await cache.invalidateStream(stream_id);
+
     res.json({
       success: true,
       amount_withdrawn: result.result.toString(),
       transaction_hash: result.hash,
     });
 
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @swagger
+ * /api/streams/cache-metrics:
+ *   get:
+ *     summary: Cache hit/miss metrics
+ *     tags: [Streams]
+ *     responses:
+ *       200:
+ *         description: Cache metrics
+ */
+router.get('/cache-metrics', (req, res) => {
+  res.json({ success: true, cache: cache.getMetrics() });
+});
+
+/**
+ * @swagger
+ * /api/streams/{stream_id}/top-up:
+ *   post:
+ *     summary: Top up an existing stream with additional funds
+ *     description: Employer adds more funds to an active stream without cancellation. Validates stream exists and is active, transfers funds to escrow, and emits a top-up event.
+ *     tags: [Streams]
+ *     parameters:
+ *       - in: path
+ *         name: stream_id
+ *         required: true
+ *         schema:
+ *           $ref: '#/components/schemas/StreamId'
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [employer, amount]
+ *             properties:
+ *               employer:
+ *                 $ref: '#/components/schemas/Address'
+ *               amount:
+ *                 $ref: '#/components/schemas/Amount'
+ *                 description: Additional funds to deposit (in smallest token units)
+ *     responses:
+ *       200:
+ *         description: Top-up successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 stream_id: { type: integer, example: 42 }
+ *                 amount_added: { $ref: '#/components/schemas/Amount' }
+ *                 transaction_hash: { type: string }
+ *       400:
+ *         $ref: '#/components/responses/ValidationError'
+ *       404:
+ *         description: Stream not found or not active
+ */
+router.post('/:stream_id/top-up', [
+  param('stream_id').isInt({ min: 1 }).withMessage('Invalid stream ID'),
+  body('employer').isString().matches(/^G[A-Z0-9]{55}$/).withMessage('Invalid employer address'),
+  body('amount').isString().matches(/^[1-9][0-9]*$/).withMessage('Amount must be a positive integer string'),
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation failed', details: errors.array() });
+    }
+
+    const { stream_id } = req.params;
+    const { employer, amount } = req.body;
+
+    if (!stellarService.validateAddress(employer)) {
+      return res.status(400).json({ error: 'Invalid employer address' });
+    }
+
+    // Validate stream exists and is active before submitting top-up
+    const stream = await stellarService.callContractMethod({
+      contractId: stellarService.streamContractId,
+      functionName: 'get_stream',
+      args: [BigInt(stream_id)],
+    });
+
+    if (!stream) {
+      return res.status(404).json({ error: 'Stream not found', code: 'STREAM_NOT_FOUND' });
+    }
+
+    if (stream.status && stream.status !== 'Active') {
+      return res.status(400).json({
+        error: `Cannot top up a stream with status: ${stream.status}`,
+        code: 'INVALID_STREAM_STATUS',
+      });
+    }
+
+    const result = await stellarService.submitContractTransaction({
+      sourceKey: employer,
+      contractId: stellarService.streamContractId,
+      functionName: 'top_up',
+      args: [
+        new stellarService.rpc.Address(employer),
+        BigInt(stream_id),
+        BigInt(amount),
+      ],
+    });
+
+    // Invalidate cache so next read reflects updated deposit
+    await cache.invalidateStream(stream_id);
+
+    res.json({
+      success: true,
+      stream_id: parseInt(stream_id, 10),
+      amount_added: amount,
+      transaction_hash: result.hash,
+    });
   } catch (error) {
     next(error);
   }

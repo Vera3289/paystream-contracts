@@ -1,14 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use soroban_sdk::{Env, Address, symbol_short};
-use crate::types::StreamStatus;
+use soroban_sdk::{Env, Address, symbol_short, BytesN};
+use crate::StreamStatus;
 
-pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address, rate: i128) {
-    env.events().publish((symbol_short!("created"), id), (employer.clone(), employee.clone(), rate));
+pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address, rate: i128, fee_bps: u32) {
+    env.events().publish((symbol_short!("created"), id), (employer.clone(), employee.clone(), rate, fee_bps));
+}
+
+pub fn stream_transferred(env: &Env, id: u64, previous_employee: &Address, new_employee: &Address) {
+    env.events().publish(
+        (symbol_short!("transfer"), id),
+        (previous_employee.clone(), new_employee.clone()),
+    );
 }
 
 pub fn withdrawn(env: &Env, id: u64, employee: &Address, amount: i128) {
     env.events().publish((symbol_short!("withdraw"), id), (employee.clone(), amount));
+}
+
+pub fn protocol_fee_collected(env: &Env, id: u64, fee_amount: i128, recipient: &Address) {
+    env.events().publish((symbol_short!("fee_col"), id), (fee_amount, recipient.clone()));
+}
+
+pub fn protocol_fees_withdrawn(env: &Env, token: &Address, amount: i128, recipient: &Address) {
+    env.events().publish((symbol_short!("fee_wdr"),), (token.clone(), amount, recipient.clone()));
 }
 
 pub fn stream_status_changed(env: &Env, id: u64, status: &StreamStatus) {
@@ -57,6 +72,11 @@ pub fn rate_changed(env: &Env, id: u64, old_rate: i128, new_rate: i128) {
     env.events().publish((symbol_short!("ratechng"), id), (old_rate, new_rate));
 }
 
+/// Emitted when a delegate is set or revoked for a stream. (#287)
+pub fn delegate_set(env: &Env, id: u64, delegate: Option<Address>) {
+    env.events().publish((symbol_short!("delegate"), id), delegate);
+}
+
 /// Emitted when a governance proposal is created (#124).
 pub fn proposal_created(env: &Env, id: u64) {
     env.events().publish((symbol_short!("propcreat"), id), id);
@@ -65,4 +85,34 @@ pub fn proposal_created(env: &Env, id: u64) {
 /// Emitted when a governance proposal is executed (#124).
 pub fn proposal_executed(env: &Env, id: u64) {
     env.events().publish((symbol_short!("propexec"), id), id);
+}
+
+/// Emitted when an admin action is proposed via multisig (#499).
+pub fn admin_action_proposed(env: &Env, id: u64) {
+    env.events().publish((symbol_short!("admprop"), id), id);
+}
+
+/// Emitted when an admin action is executed via multisig (#499).
+pub fn admin_action_executed(env: &Env, id: u64) {
+    env.events().publish((symbol_short!("admexec"), id), id);
+}
+pub fn global_paused(env: &Env, paused: bool) {
+    env.events().publish(
+        (symbol_short!("glb_pause"),),
+        paused,
+    );
+}
+
+pub fn upgrade_scheduled(env: &Env, new_wasm_hash: &BytesN<32>, scheduled_at: u64) {
+    env.events().publish(
+        (symbol_short!("upg_sched"),),
+        (new_wasm_hash.clone(), scheduled_at),
+    );
+}
+
+pub fn upgrade_executed(env: &Env, new_wasm_hash: &BytesN<32>) {
+    env.events().publish(
+        (symbol_short!("upg_exec"),),
+        new_wasm_hash.clone(),
+    );
 }

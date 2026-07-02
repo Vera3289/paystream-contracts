@@ -1,0 +1,27 @@
+name: Validate Monitoring Config
+
+on:
+  pull_request:
+    paths:
+      - "monitoring/**"
+
+jobs:
+  validate:
+    name: Lint Prometheus config and alert rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check prometheus.yml syntax
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/monitoring:/etc/prometheus:ro" \
+            prom/prometheus:v2.52.0 \
+            promtool check config /etc/prometheus/prometheus.yml
+
+      - name: Check alert rules syntax
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/monitoring/alerts:/alerts:ro" \
+            prom/prometheus:v2.52.0 \
+            promtool check rules /alerts/paystream.rules.yml
